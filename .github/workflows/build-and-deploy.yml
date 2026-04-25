@@ -115,6 +115,8 @@ jobs:
           compose_file: ${{ inputs.compose_file }}
           image_tag: ${{ steps.build.outputs.image_tag }}
           ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Wait for health
         id: health

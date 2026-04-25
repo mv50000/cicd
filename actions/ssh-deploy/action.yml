@@ -25,6 +25,18 @@ inputs:
   ssh_port:
     required: false
     default: "22"
+  registry:
+    required: false
+    default: ghcr.io
+    description: "Container registry to log into on the deploy host before pull"
+  registry_username:
+    required: false
+    default: ""
+    description: "Registry username (typically github.actor)"
+  registry_password:
+    required: false
+    default: ""
+    description: "Short-lived registry token (typically GITHUB_TOKEN). If empty, registry login is skipped."
 
 runs:
   using: composite
@@ -76,11 +88,20 @@ runs:
 
     - name: Update .env IMAGE_TAG and pull
       shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REGISTRY_USER: ${{ inputs.registry_username }}
+        REGISTRY_PASS: ${{ inputs.registry_password }}
       run: |
         ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }} \
-          ${{ inputs.deploy_user }}@${{ inputs.deploy_host }} bash -s <<'REMOTE'
+          ${{ inputs.deploy_user }}@${{ inputs.deploy_host }} \
+          REGISTRY="$REGISTRY" REGISTRY_USER="$REGISTRY_USER" REGISTRY_PASS="$REGISTRY_PASS" \
+          DEPLOY_PATH="${{ inputs.deploy_path }}" \
+          COMPOSE_FILE="${{ inputs.compose_file }}" \
+          IMAGE_TAG="${{ steps.target.outputs.tag }}" \
+          bash -s <<'REMOTE'
         set -euo pipefail
-        cd "${{ inputs.deploy_path }}"
+        cd "$DEPLOY_PATH"
 
         # Initialize tag history files if missing
         touch current-tag previous-tag
@@ -90,13 +111,25 @@ runs:
           grep -v '^IMAGE_TAG=' .env > .env.tmp 2>/dev/null || true
           mv .env.tmp .env
         fi
-        echo "IMAGE_TAG=${{ steps.target.outputs.tag }}" >> .env
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+
+        # Log in to registry with a short-lived token (no persistent creds on disk)
+        LOGGED_IN=0
+        if [ -n "$REGISTRY_PASS" ]; then
+          echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          LOGGED_IN=1
+        fi
 
         # Pre-pull all images to validate availability before swap
-        docker compose -f "${{ inputs.compose_file }}" pull
+        docker compose -f "$COMPOSE_FILE" pull
 
         # Bring stack up with --wait (Compose v2.17+ atomic-ish)
-        docker compose -f "${{ inputs.compose_file }}" up -d --wait --remove-orphans
+        docker compose -f "$COMPOSE_FILE" up -d --wait --remove-orphans
+
+        # Logout to avoid leaving creds in ~/.docker/config.json
+        if [ "$LOGGED_IN" = "1" ]; then
+          docker logout "$REGISTRY" >/dev/null 2>&1 || true
+        fi
         REMOTE
 
     - name: Update tag history (success path only)

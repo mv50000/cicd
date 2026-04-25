@@ -56,6 +56,8 @@ jobs:
           compose_file: ${{ inputs.compose_file }}
           rollback: "true"
           ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Wait for health
         uses: mv50000/cicd/actions/wait-for-health@v1
