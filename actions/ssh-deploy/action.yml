@@ -43,6 +43,12 @@ runs:
       run: |
         if [ -d deploy ]; then
           rsync -az --delete \
+            --exclude=.env \
+            --exclude=current-tag \
+            --exclude=previous-tag \
+            --exclude=data \
+            --exclude=logs \
+            --exclude=cache \
             -e "ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }}" \
             deploy/ \
             ${{ inputs.deploy_user }}@${{ inputs.deploy_host }}:${{ inputs.deploy_path }}/
