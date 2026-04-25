@@ -1,0 +1,55 @@
+name: PR Checks (reusable)
+
+# Generic PR-time validation: image builds successfully, optional test command runs.
+# Companies may extend this from their own pr.yml or skip and write a custom one.
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+      build_context:
+        type: string
+        required: false
+        default: "."
+      test_command:
+        type: string
+        required: false
+        default: ""
+        description: "Shell command to run in the built image; empty skips testing"
+      runner_label:
+        type: string
+        required: false
+        default: self-hosted
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: Build (${{ inputs.dockerfile }})
+    runs-on: ${{ inputs.runner_label == 'self-hosted' && fromJSON('["self-hosted","paperclip"]') || fromJSON(format('["{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mv50000/cicd/actions/setup-toolchain@v1
+
+      - name: Build (no push)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.build_context }}/${{ inputs.dockerfile }}
+          push: false
+          load: true
+          tags: paperclip-pr-build:${{ github.sha }}
+          cache-from: type=gha,scope=${{ github.repository }}-pr
+          cache-to: type=gha,scope=${{ github.repository }}-pr,mode=max
+
+      - name: Run test command in built image
+        if: inputs.test_command != ''
+        run: |
+          docker run --rm paperclip-pr-build:${{ github.sha }} sh -c "${{ inputs.test_command }}"

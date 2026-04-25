@@ -1,0 +1,43 @@
+name: Wait for health
+description: "Poll health_url with backoff until 200 OK or timeout. Outputs status: ok | failed"
+
+inputs:
+  health_url:
+    required: true
+  timeout_s:
+    required: false
+    default: "60"
+  interval_s:
+    required: false
+    default: "3"
+
+outputs:
+  status:
+    description: "ok | failed"
+    value: ${{ steps.poll.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Poll health endpoint
+      id: poll
+      shell: bash
+      run: |
+        URL="${{ inputs.health_url }}"
+        TIMEOUT=${{ inputs.timeout_s }}
+        INTERVAL=${{ inputs.interval_s }}
+        DEADLINE=$(( $(date +%s) + TIMEOUT ))
+
+        echo "Polling ${URL} (timeout ${TIMEOUT}s, interval ${INTERVAL}s)"
+        while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+          if curl -sSf -o /dev/null -m 5 "$URL"; then
+            echo "::notice::Health OK"
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sleep "$INTERVAL"
+        done
+
+        echo "::error::Health check failed after ${TIMEOUT}s polling ${URL}"
+        echo "status=failed" >> "$GITHUB_OUTPUT"
+        exit 0  # Don't fail step; let caller inspect status output

@@ -1,0 +1,48 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: "Target environment"
+        options: [dev, prod]
+        default: prod
+      action:
+        type: choice
+        description: "Action"
+        options: [deploy, rollback]
+        default: deploy
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    if: github.event.inputs.action != 'rollback'
+    uses: mv50000/cicd/.github/workflows/build-and-deploy.yml@v1
+    with:
+      company: COMPANY
+      environment: ${{ github.event.inputs.environment || 'prod' }}
+      image_name: ghcr.io/mv50000/COMPANY
+      deploy_host: paperclip-01.rk9.fi
+      deploy_path: /srv/COMPANY/${{ github.event.inputs.environment || 'prod' }}
+      health_url: http://localhost:3000/api/health
+    secrets:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  rollback:
+    if: github.event.inputs.action == 'rollback'
+    uses: mv50000/cicd/.github/workflows/rollback.yml@v1
+    with:
+      company: COMPANY
+      environment: ${{ github.event.inputs.environment || 'prod' }}
+      deploy_host: paperclip-01.rk9.fi
+      deploy_path: /srv/COMPANY/${{ github.event.inputs.environment || 'prod' }}
+      health_url: http://localhost:3000/api/health
+    secrets:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

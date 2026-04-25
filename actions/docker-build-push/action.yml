@@ -1,0 +1,83 @@
+name: Docker build and push
+description: "Multi-stage Docker build with BuildKit cache, push to GHCR with sha and env-pointer tags"
+
+inputs:
+  image_name:
+    required: true
+    description: "Full image name without tag, e.g. ghcr.io/mv50000/saatavilla"
+  dockerfile:
+    required: false
+    default: Dockerfile
+  context:
+    required: false
+    default: "."
+  build_args:
+    required: false
+    default: ""
+  environment:
+    required: true
+    description: "dev | prod (becomes :env-{environment} pointer tag)"
+  github_token:
+    required: true
+
+outputs:
+  image_tag:
+    description: "Canonical sha-XXXXXXX tag"
+    value: ${{ steps.compute.outputs.image_tag }}
+  full_image:
+    description: "Full image reference image_name:image_tag"
+    value: ${{ steps.compute.outputs.full_image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute tags
+      id: compute
+      shell: bash
+      run: |
+        SHORT_SHA="${GITHUB_SHA:0:7}"
+        IMAGE_TAG="sha-${SHORT_SHA}"
+        echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+        echo "full_image=${{ inputs.image_name }}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+        BRANCH_SLUG="$(echo "${GITHUB_REF_NAME}" | tr '/_' '--' | tr '[:upper:]' '[:lower:]')"
+        ENV_TAG="env-${{ inputs.environment }}"
+
+        TAGS="${{ inputs.image_name }}:${IMAGE_TAG}"
+        TAGS="${TAGS}\n${{ inputs.image_name }}:${ENV_TAG}"
+
+        if [[ "${GITHUB_EVENT_NAME}" == "push" && -n "${BRANCH_SLUG}" && "${GITHUB_REF_TYPE}" == "branch" ]]; then
+          TAGS="${TAGS}\n${{ inputs.image_name }}:branch-${BRANCH_SLUG}"
+        fi
+
+        if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+          TAGS="${{ inputs.image_name }}:pr-${{ github.event.number }}\n${{ inputs.image_name }}:${IMAGE_TAG}"
+        fi
+
+        if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" =~ ^v ]]; then
+          TAGS="${TAGS}\n${{ inputs.image_name }}:${GITHUB_REF_NAME}"
+        fi
+
+        {
+          echo "tags<<EOF"
+          printf '%b' "${TAGS}"
+          echo
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+        push: true
+        tags: ${{ steps.compute.outputs.tags }}
+        build-args: ${{ inputs.build_args }}
+        cache-from: type=gha,scope=${{ github.repository }}-${{ inputs.environment }}
+        cache-to: type=gha,scope=${{ github.repository }}-${{ inputs.environment }},mode=max
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+          paperclip.company=${{ github.event.repository.name }}
+          paperclip.environment=${{ inputs.environment }}

@@ -1,0 +1,25 @@
+# Server-side compose file. Copied to /srv/{company}/{env}/ by ssh-deploy.
+# IMAGE_TAG is set by the deploy action; other env vars come from .env (manual).
+
+services:
+  app:
+    image: ghcr.io/mv50000/COMPANY:${IMAGE_TAG}
+    container_name: COMPANY-app
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/srv/data
+      - ./logs:/srv/logs
+    healthcheck:
+      test: ["CMD", "curl", "-sSf", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

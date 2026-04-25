@@ -1,0 +1,153 @@
+name: Build and Deploy
+
+on:
+  workflow_call:
+    inputs:
+      company:
+        type: string
+        required: true
+        description: "Company slug (e.g. saatavilla, ololla, alli-audit)"
+      component:
+        type: string
+        required: false
+        default: app
+        description: "Component name when company has multiple services (e.g. backend, frontend)"
+      environment:
+        type: string
+        required: true
+        description: "Target environment: dev | prod"
+      image_name:
+        type: string
+        required: true
+        description: "Full image name without tag, e.g. ghcr.io/mv50000/saatavilla"
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+      build_context:
+        type: string
+        required: false
+        default: "."
+      build_args:
+        type: string
+        required: false
+        default: ""
+        description: "Newline-separated KEY=VALUE pairs"
+      deploy_host:
+        type: string
+        required: true
+      deploy_user:
+        type: string
+        required: false
+        default: deploy
+      deploy_path:
+        type: string
+        required: true
+        description: "Server-side directory, e.g. /srv/saatavilla/prod"
+      compose_file:
+        type: string
+        required: false
+        default: docker-compose.yml
+      health_url:
+        type: string
+        required: true
+      health_timeout_s:
+        type: number
+        required: false
+        default: 60
+      runner_label:
+        type: string
+        required: false
+        default: self-hosted
+    secrets:
+      DEPLOY_SSH_KEY:
+        required: true
+      SLACK_WEBHOOK_URL:
+        required: false
+    outputs:
+      image_tag:
+        description: "Pushed image tag (sha-XXXXXXX)"
+        value: ${{ jobs.deploy.outputs.image_tag }}
+      health_status:
+        description: "ok | degraded | failed"
+        value: ${{ jobs.deploy.outputs.health_status }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    name: ${{ inputs.company }}/${{ inputs.environment }}
+    runs-on: ${{ inputs.runner_label == 'self-hosted' && fromJSON('["self-hosted","paperclip"]') || fromJSON(format('["{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-${{ inputs.company }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+      health_status: ${{ steps.health.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up toolchain
+        uses: mv50000/cicd/actions/setup-toolchain@v1
+
+      - name: Build and push Docker image
+        id: build
+        uses: mv50000/cicd/actions/docker-build-push@v1
+        with:
+          image_name: ${{ inputs.image_name }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.build_context }}
+          build_args: ${{ inputs.build_args }}
+          environment: ${{ inputs.environment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: SSH deploy to ${{ inputs.deploy_host }}
+        id: deploy
+        uses: mv50000/cicd/actions/ssh-deploy@v1
+        with:
+          deploy_host: ${{ inputs.deploy_host }}
+          deploy_user: ${{ inputs.deploy_user }}
+          deploy_path: ${{ inputs.deploy_path }}
+          compose_file: ${{ inputs.compose_file }}
+          image_tag: ${{ steps.build.outputs.image_tag }}
+          ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Wait for health
+        id: health
+        uses: mv50000/cicd/actions/wait-for-health@v1
+        with:
+          health_url: ${{ inputs.health_url }}
+          timeout_s: ${{ inputs.health_timeout_s }}
+
+      - name: Auto-rollback on health failure
+        if: steps.health.outputs.status == 'failed'
+        uses: mv50000/cicd/actions/ssh-deploy@v1
+        with:
+          deploy_host: ${{ inputs.deploy_host }}
+          deploy_user: ${{ inputs.deploy_user }}
+          deploy_path: ${{ inputs.deploy_path }}
+          compose_file: ${{ inputs.compose_file }}
+          rollback: "true"
+          ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Notify Slack
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        uses: mv50000/cicd/actions/slack-notify@v1
+        with:
+          company: ${{ inputs.company }}
+          environment: ${{ inputs.environment }}
+          status: ${{ job.status }}
+          image_tag: ${{ steps.build.outputs.image_tag }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Fail job if health failed
+        if: steps.health.outputs.status == 'failed'
+        run: |
+          echo "::error::Health check failed; rollback attempted"
+          exit 1

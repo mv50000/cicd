@@ -1,0 +1,13 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    uses: mv50000/cicd/.github/workflows/pr-checks.yml@v1
+    with:
+      dockerfile: Dockerfile
+      # Optional: command to run inside the built image, e.g. "npm test" or "cargo test"
+      test_command: ""

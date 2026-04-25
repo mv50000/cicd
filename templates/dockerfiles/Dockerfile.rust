@@ -1,0 +1,35 @@
+# Rust template — multi-stage build with BuildKit cache mounts.
+# Replace `app` with your binary name. Add system deps to runtime stage as needed.
+
+# syntax=docker/dockerfile:1.6
+
+ARG RUST_VERSION=1.83
+ARG DEBIAN_VERSION=bookworm-slim
+
+FROM rust:${RUST_VERSION}-slim AS builder
+WORKDIR /src
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked && \
+    cp target/release/app /app
+
+FROM debian:${DEBIAN_VERSION}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+COPY --from=builder /app /usr/local/bin/app
+
+EXPOSE 3000
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD curl -sSf http://localhost:3000/health || exit 1
+
+CMD ["app"]

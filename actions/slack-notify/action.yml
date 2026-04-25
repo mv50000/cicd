@@ -1,0 +1,44 @@
+name: Slack notify
+description: "Post deploy status to Slack via webhook. No-op if webhook_url is empty"
+
+inputs:
+  company:
+    required: true
+  environment:
+    required: true
+  status:
+    required: true
+    description: "success | failure | cancelled (job.status)"
+  image_tag:
+    required: false
+    default: ""
+  webhook_url:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack message
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.webhook_url }}" ]; then
+          echo "No SLACK_WEBHOOK_URL; skipping notification"
+          exit 0
+        fi
+
+        case "${{ inputs.status }}" in
+          success) ICON=":white_check_mark:" ;;
+          failure) ICON=":x:" ;;
+          cancelled) ICON=":no_entry_sign:" ;;
+          *) ICON=":grey_question:" ;;
+        esac
+
+        TEXT="${ICON} *${{ inputs.company }}* / \`${{ inputs.environment }}\` deploy *${{ inputs.status }}*"
+        if [ -n "${{ inputs.image_tag }}" ]; then
+          TEXT="${TEXT} — \`${{ inputs.image_tag }}\`"
+        fi
+        TEXT="${TEXT}\n<${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View run>"
+
+        curl -sS -X POST -H 'Content-Type: application/json' \
+          --data "$(jq -n --arg t "$TEXT" '{text:$t}')" \
+          "${{ inputs.webhook_url }}" || echo "::warning::Slack webhook failed"

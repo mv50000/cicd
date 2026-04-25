@@ -1,0 +1,44 @@
+# Node.js / Next.js template — pnpm with BuildKit cache, standalone output.
+
+# syntax=docker/dockerfile:1.6
+
+ARG NODE_VERSION=20
+FROM node:${NODE_VERSION}-alpine AS deps
+WORKDIR /src
+RUN corepack enable
+COPY package.json pnpm-lock.yaml* package-lock.json* yarn.lock* ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; \
+    elif [ -f package-lock.json ]; then npm ci; \
+    elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
+    fi
+
+FROM node:${NODE_VERSION}-alpine AS builder
+WORKDIR /src
+RUN corepack enable
+COPY --from=deps /src/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN if [ -f pnpm-lock.yaml ]; then pnpm run build; \
+    elif [ -f package-lock.json ]; then npm run build; \
+    else yarn build; fi
+
+FROM node:${NODE_VERSION}-alpine AS runner
+WORKDIR /srv
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+RUN apk add --no-cache curl
+
+# Adjust paths if not using Next.js standalone output
+COPY --from=builder --chown=nextjs:nodejs /src/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /src/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /src/public ./public
+
+USER nextjs
+EXPOSE 3000
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD curl -sSf http://localhost:3000/api/health || exit 1
+
+CMD ["node", "server.js"]

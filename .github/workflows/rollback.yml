@@ -1,0 +1,64 @@
+name: Rollback (manual dispatch)
+
+# Reusable workflow for manual rollback triggered from a company repo.
+# The company's own deploy.yml exposes the workflow_dispatch input;
+# this workflow performs the actual rollback over SSH.
+
+on:
+  workflow_call:
+    inputs:
+      company:
+        type: string
+        required: true
+      environment:
+        type: string
+        required: true
+      deploy_host:
+        type: string
+        required: true
+      deploy_user:
+        type: string
+        required: false
+        default: deploy
+      deploy_path:
+        type: string
+        required: true
+      compose_file:
+        type: string
+        required: false
+        default: docker-compose.yml
+      health_url:
+        type: string
+        required: true
+      runner_label:
+        type: string
+        required: false
+        default: self-hosted
+    secrets:
+      DEPLOY_SSH_KEY:
+        required: true
+
+jobs:
+  rollback:
+    name: Rollback ${{ inputs.company }}/${{ inputs.environment }}
+    runs-on: ${{ inputs.runner_label == 'self-hosted' && fromJSON('["self-hosted","paperclip"]') || fromJSON(format('["{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-${{ inputs.company }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: SSH rollback
+        uses: mv50000/cicd/actions/ssh-deploy@v1
+        with:
+          deploy_host: ${{ inputs.deploy_host }}
+          deploy_user: ${{ inputs.deploy_user }}
+          deploy_path: ${{ inputs.deploy_path }}
+          compose_file: ${{ inputs.compose_file }}
+          rollback: "true"
+          ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Wait for health
+        uses: mv50000/cicd/actions/wait-for-health@v1
+        with:
+          health_url: ${{ inputs.health_url }}
+          timeout_s: 60
