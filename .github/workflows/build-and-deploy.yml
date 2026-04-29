@@ -124,6 +124,9 @@ jobs:
         with:
           health_url: ${{ inputs.health_url }}
           timeout_s: ${{ inputs.health_timeout_s }}
+          ssh_host: ${{ inputs.deploy_host }}
+          ssh_user: ${{ inputs.deploy_user }}
+          ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
 
       - name: Auto-rollback on health failure
         if: steps.health.outputs.status == 'failed'
