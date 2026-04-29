@@ -92,10 +92,12 @@ runs:
         REGISTRY: ${{ inputs.registry }}
         REGISTRY_USER: ${{ inputs.registry_username }}
         REGISTRY_PASS: ${{ inputs.registry_password }}
+        IS_ROLLBACK: ${{ inputs.rollback }}
       run: |
         ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }} \
           ${{ inputs.deploy_user }}@${{ inputs.deploy_host }} \
           REGISTRY="$REGISTRY" REGISTRY_USER="$REGISTRY_USER" REGISTRY_PASS="$REGISTRY_PASS" \
+          IS_ROLLBACK="$IS_ROLLBACK" \
           DEPLOY_PATH="${{ inputs.deploy_path }}" \
           COMPOSE_FILE="${{ inputs.compose_file }}" \
           IMAGE_TAG="${{ steps.target.outputs.tag }}" \
@@ -120,8 +122,10 @@ runs:
           LOGGED_IN=1
         fi
 
-        # Pre-pull all images to validate availability before swap
-        docker compose -f "$COMPOSE_FILE" pull
+        # Skip pull during rollback — the previous image is already cached from the prior deploy
+        if [ "$IS_ROLLBACK" != "true" ]; then
+          docker compose -f "$COMPOSE_FILE" pull
+        fi
 
         # Bring stack up with --wait (Compose v2.17+ atomic-ish)
         docker compose -f "$COMPOSE_FILE" up -d --wait --remove-orphans
