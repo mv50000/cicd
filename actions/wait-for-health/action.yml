@@ -1,5 +1,5 @@
 name: Wait for health
-description: "Poll health_url with backoff until 200 OK or timeout. Outputs status: ok | failed"
+description: "Poll health_url with backoff until 200 OK or timeout. Supports SSH-based checks for remote deploy hosts. Outputs status: ok | failed"
 
 inputs:
   health_url:
@@ -10,6 +10,16 @@ inputs:
   interval_s:
     required: false
     default: "3"
+  ssh_host:
+    required: false
+    default: ""
+    description: "Run health check via SSH on this host instead of locally"
+  ssh_user:
+    required: false
+    default: "deploy"
+  ssh_key:
+    required: false
+    default: ""
 
 outputs:
   status:
@@ -22,22 +32,42 @@ runs:
     - name: Poll health endpoint
       id: poll
       shell: bash
+      env:
+        HEALTH_URL: ${{ inputs.health_url }}
+        HEALTH_TIMEOUT: ${{ inputs.timeout_s }}
+        HEALTH_INTERVAL: ${{ inputs.interval_s }}
+        SSH_HOST: ${{ inputs.ssh_host }}
+        SSH_USER: ${{ inputs.ssh_user }}
+        SSH_KEY: ${{ inputs.ssh_key }}
       run: |
-        URL="${{ inputs.health_url }}"
-        TIMEOUT=${{ inputs.timeout_s }}
-        INTERVAL=${{ inputs.interval_s }}
-        DEADLINE=$(( $(date +%s) + TIMEOUT ))
+        DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
 
-        echo "Polling ${URL} (timeout ${TIMEOUT}s, interval ${INTERVAL}s)"
+        if [ -n "$SSH_HOST" ]; then
+          KEY_FILE=$(mktemp)
+          printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$KEY_FILE")
+          echo "Polling ${HEALTH_URL} via SSH on ${SSH_HOST} (timeout ${HEALTH_TIMEOUT}s, interval ${HEALTH_INTERVAL}s)"
+        else
+          echo "Polling ${HEALTH_URL} locally (timeout ${HEALTH_TIMEOUT}s, interval ${HEALTH_INTERVAL}s)"
+        fi
+
         while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-          if curl -sSf -o /dev/null -m 5 "$URL"; then
+          if [ -n "$SSH_HOST" ]; then
+            RESULT=$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "curl -sSf -o /dev/null -m 5 '${HEALTH_URL}'" 2>/dev/null && echo OK || echo FAIL)
+          else
+            RESULT=$(curl -sSf -o /dev/null -m 5 "$HEALTH_URL" 2>/dev/null && echo OK || echo FAIL)
+          fi
+
+          if [ "$RESULT" = "OK" ]; then
             echo "::notice::Health OK"
             echo "status=ok" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          sleep "$INTERVAL"
+          sleep "$HEALTH_INTERVAL"
         done
 
-        echo "::error::Health check failed after ${TIMEOUT}s polling ${URL}"
+        echo "::error::Health check failed after ${HEALTH_TIMEOUT}s polling ${HEALTH_URL}"
         echo "status=failed" >> "$GITHUB_OUTPUT"
-        exit 0  # Don't fail step; let caller inspect status output
+        exit 0
