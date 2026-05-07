@@ -43,16 +43,20 @@ runs:
   steps:
     - name: Configure SSH
       shell: bash
+      env:
+        _SSH_KEY: ${{ inputs.ssh_key }}
       run: |
         mkdir -p ~/.ssh
-        echo "${{ inputs.ssh_key }}" > ~/.ssh/deploy_key
-        chmod 600 ~/.ssh/deploy_key
+        KEY_FILE=~/.ssh/deploy_key_${GITHUB_RUN_ID}
+        printf '%s\n' "$_SSH_KEY" > "$KEY_FILE"
+        chmod 600 "$KEY_FILE"
         ssh-keyscan -p ${{ inputs.ssh_port }} -H ${{ inputs.deploy_host }} >> ~/.ssh/known_hosts 2>/dev/null
 
     - name: Sync deploy/ artifacts (skip on rollback)
       if: inputs.rollback != 'true'
       shell: bash
       run: |
+        KEY_FILE=~/.ssh/deploy_key_${GITHUB_RUN_ID}
         if [ -d deploy ]; then
           rsync -az --delete \
             --exclude=.env \
@@ -61,7 +65,7 @@ runs:
             --exclude=data \
             --exclude=logs \
             --exclude=cache \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }}" \
+            -e "ssh -i $KEY_FILE -p ${{ inputs.ssh_port }}" \
             deploy/ \
             ${{ inputs.deploy_user }}@${{ inputs.deploy_host }}:${{ inputs.deploy_path }}/
         else
@@ -72,8 +76,9 @@ runs:
       id: target
       shell: bash
       run: |
+        KEY_FILE=~/.ssh/deploy_key_${GITHUB_RUN_ID}
         if [ "${{ inputs.rollback }}" = "true" ]; then
-          TAG=$(ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }} \
+          TAG=$(ssh -i "$KEY_FILE" -p ${{ inputs.ssh_port }} \
             ${{ inputs.deploy_user }}@${{ inputs.deploy_host }} \
             "cat ${{ inputs.deploy_path }}/previous-tag 2>/dev/null || echo ''")
           if [ -z "$TAG" ]; then
@@ -94,7 +99,8 @@ runs:
         REGISTRY_PASS: ${{ inputs.registry_password }}
         IS_ROLLBACK: ${{ inputs.rollback }}
       run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }} \
+        KEY_FILE=~/.ssh/deploy_key_${GITHUB_RUN_ID}
+        ssh -i "$KEY_FILE" -p ${{ inputs.ssh_port }} \
           ${{ inputs.deploy_user }}@${{ inputs.deploy_host }} \
           REGISTRY="$REGISTRY" REGISTRY_USER="$REGISTRY_USER" REGISTRY_PASS="$REGISTRY_PASS" \
           IS_ROLLBACK="$IS_ROLLBACK" \
@@ -140,7 +146,8 @@ runs:
       if: inputs.rollback != 'true'
       shell: bash
       run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ inputs.ssh_port }} \
+        KEY_FILE=~/.ssh/deploy_key_${GITHUB_RUN_ID}
+        ssh -i "$KEY_FILE" -p ${{ inputs.ssh_port }} \
           ${{ inputs.deploy_user }}@${{ inputs.deploy_host }} bash -s <<'REMOTE'
         set -euo pipefail
         cd "${{ inputs.deploy_path }}"
@@ -153,4 +160,4 @@ runs:
     - name: Cleanup SSH key
       if: always()
       shell: bash
-      run: rm -f ~/.ssh/deploy_key
+      run: rm -f ~/.ssh/deploy_key_${GITHUB_RUN_ID}
