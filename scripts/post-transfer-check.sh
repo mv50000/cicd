@@ -138,6 +138,18 @@ fi
 echo "--- stale references (workflows) ---"
 if [ -n "$LOCAL_PATH" ] && [ -d "$LOCAL_PATH/.github/workflows" ]; then
   wf="$LOCAL_PATH/.github/workflows"
+  # The grep runs against the local working tree. If that clone is behind its
+  # upstream, the matches may be stale (refs already fixed on the remote default
+  # branch). Warn — without fetching — so a stale clone is not mistaken for a
+  # broken repo. (Discovered on RK9-26: /opt/repos/quantimodo was ~135 commits
+  # behind and showed long-since-migrated refs.)
+  upstream=$(git -C "$LOCAL_PATH" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+  if [ -n "$upstream" ]; then
+    behind=$(git -C "$LOCAL_PATH" rev-list --count "HEAD..${upstream}" 2>/dev/null || echo 0)
+    if [ "${behind:-0}" -ge 1 ]; then
+      warn "local clone is ${behind} commit(s) behind ${upstream} — grep below may be stale; 'git -C ${LOCAL_PATH} pull' before trusting it"
+    fi
+  fi
   # 3. ghcr.io/<old-owner> — BREAKS (GHCR push 403 after transfer).
   # Split matches: a line that is a comment, or that ALSO contains the new
   # namespace (a sed/rewrite migration line like s|.../mv50000/...|.../rk9-ai/...|),

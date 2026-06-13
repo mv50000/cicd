@@ -127,6 +127,13 @@ For each transferred repo `rk9-ai/<repo>` with a local clone at `/opt/repos/<dir
   `offline` until a job spins them up, so a repo using them legitimately reports
   0 online repo-level runners. The checker downgrades this to a WARN when the org
   has runners registered — confirm liveness via a recent workflow run.
+- **Stale local clone = false alarm.** `post-transfer-check.sh` greps the local
+  working tree. If `/opt/repos/<repo>` is far behind its upstream, it will show
+  `ghcr.io/mv50000` refs that were *already migrated* on the remote default
+  branch (observed on RK9-26: `/opt/repos/quantimodo` was ~135 commits behind and
+  still showed old refs although `rk9-ai/quantimodo-rust` master was fully
+  migrated). The script now WARNs when the clone is behind upstream — `git pull`
+  the clone (or check a fresh clone) before trusting the grep.
 
 ## Scripts
 
