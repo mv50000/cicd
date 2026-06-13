@@ -1,0 +1,26 @@
+# RK9-37 deploy-runner guardrail (reusable).
+# Call from a repo's pr-checks to fail PRs that move a host-contacting deploy
+# job onto a cloud runner. Build jobs on cloud runners are allowed.
+#
+# Usage in a consumer repo's pr-checks.yml:
+#   jobs:
+#     deploy-guard:
+#       uses: mv50000/cicd/.github/workflows/guard-deploy-labels.yml@v1
+name: Guard deploy runner labels
+
+on:
+  workflow_call: {}
+
+jobs:
+  guard:
+    name: Deploy-runner guard
+    runs-on: ubuntu-latest   # static check only — no host contact, cloud is fine here
+    steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v4
+      - name: Fetch guard script from cicd
+        run: |
+          curl -fsSL -o /tmp/check-deploy-labels.py \
+            https://raw.githubusercontent.com/mv50000/cicd/v1/scripts/check-deploy-labels.py
+      - name: Check deploy workflow runner labels
+        run: python3 /tmp/check-deploy-labels.py "$GITHUB_WORKSPACE"

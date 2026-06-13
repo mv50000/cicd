@@ -81,3 +81,6 @@ Tagit `v1`, `v2`, ... rolling — `v1` osoittaa aina viimeiseen v1-yhteensopivaa
 ## Lisenssi
 
 MIT.
+
+## Deploy-runner policy (RK9-37)
+Deploy jobs that contact a host must be self-hosted (dev-proxy 403s cloud IPs). See [docs/deploy-runner-policy.md](docs/deploy-runner-policy.md); enforced by `scripts/check-deploy-labels.py` + reusable `.github/workflows/guard-deploy-labels.yml`.
