@@ -81,19 +81,15 @@ echo "==> post-transfer-check ${SLUG} (old owner: ${OLD_OWNER}, local: ${LOCAL_P
 # So: repo-level online runner → PASS; else fall back to org-level presence
 # (WARN, since ephemeral runners can't be proven live without a job).
 echo "--- runners ---"
-if runners_json=$(gh api "repos/${SLUG}/actions/runners" 2>/dev/null); then
-  online=$(echo "$runners_json" | python3 -c '
-import json,sys
-d=json.load(sys.stdin)
-rs=d.get("runners",[])
-on=[r for r in rs if r.get("status")=="online"]
-for r in rs:
-    labels=",".join(l["name"] for l in r.get("labels",[]))
-    print("  {:<28} {:<8} [{}]".format(r["name"], r["status"], labels))
-print("__COUNT__ {} {}".format(len(on), len(rs)))
-')
-  echo "$online" | grep -v '^__COUNT__' || true
-  read -r _ n_online n_total < <(echo "$online" | grep '^__COUNT__') || true
+# Use gh's embedded jq (--jq) for JSON parsing so the script needs no python3.
+# gh api returns non-zero on an HTTP error (caught by the `if`), so the parse
+# step never runs against an error body. Status is emitted first on each line
+# so online runners match '^online ' (offline lines start with 'offline ').
+if runners_fmt=$(gh api "repos/${SLUG}/actions/runners" \
+    --jq '.runners[] | "\(.status) \(.name) [\([.labels[].name] | join(","))]"' 2>/dev/null); then
+  [ -n "$runners_fmt" ] && echo "$runners_fmt" | sed 's/^/  /'
+  n_total=$(printf '%s\n' "$runners_fmt" | grep -c . || true)
+  n_online=$(printf '%s\n' "$runners_fmt" | grep -c '^online ' || true)
   if [ "${n_online:-0}" -ge 1 ]; then
     pass "${n_online}/${n_total} repo-level runner(s) online"
   else
@@ -111,20 +107,20 @@ fi
 
 # --- 2. webhook delivery status (last 5 per hook) ---------------------------
 echo "--- webhooks ---"
-if hooks_json=$(gh api "repos/${SLUG}/hooks" 2>/dev/null); then
-  hook_ids=$(echo "$hooks_json" | python3 -c 'import json,sys; [print(h["id"], h.get("config",{}).get("url","")) for h in json.load(sys.stdin)]')
+if hook_ids=$(gh api "repos/${SLUG}/hooks" --jq '.[] | "\(.id) \(.config.url)"' 2>/dev/null); then
   if [ -z "$hook_ids" ]; then
     warn "no repo webhooks configured"
   else
     while read -r hid hurl; do
       [ -n "$hid" ] || continue
-      deliv=$(gh api "repos/${SLUG}/hooks/${hid}/deliveries?per_page=5" 2>/dev/null || echo "[]")
-      codes=$(echo "$deliv" | python3 -c 'import json,sys; print(" ".join(str(d.get("status_code")) for d in json.load(sys.stdin)))')
-      bad=$(echo "$deliv" | python3 -c 'import json,sys; print(sum(1 for d in json.load(sys.stdin) if d.get("status_code")!=200))')
-      if [ "${bad:-0}" -eq 0 ] && [ -n "$codes" ]; then
-        pass "hook ${hid} (${hurl}) last 5: ${codes}"
-      elif [ -z "$codes" ]; then
+      # newline-separated status codes for the last 5 deliveries (or empty)
+      deliv=$(gh api "repos/${SLUG}/hooks/${hid}/deliveries?per_page=5" --jq '.[].status_code' 2>/dev/null || true)
+      codes=$(printf '%s' "$deliv" | tr '\n' ' ' | sed 's/ *$//')
+      bad=$(printf '%s\n' "$deliv" | grep -c -v -e '^200$' -e '^$' || true)
+      if [ -z "$codes" ]; then
         warn "hook ${hid} (${hurl}) has no recent deliveries"
+      elif [ "${bad:-0}" -eq 0 ]; then
+        pass "hook ${hid} (${hurl}) last 5: ${codes}"
       else
         fail "hook ${hid} (${hurl}) last 5: ${codes} — ${bad} non-200"
       fi

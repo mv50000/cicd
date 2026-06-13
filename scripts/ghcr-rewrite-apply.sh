@@ -57,6 +57,12 @@ if [ -z "$NEW_OWNER" ]; then
   origin=$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || true)
   NEW_OWNER=$(echo "$origin" | sed -nE 's#.*[:/]([^/]+)/[^/]+(\.git)?$#\1#p')
   [ -n "$NEW_OWNER" ] || { echo "ERROR: could not auto-detect --new-owner from origin ('$origin'); pass --new-owner" >&2; exit 2; }
+  # Sanity: a GitHub owner is alphanumeric + hyphen (no dots/slashes). Reject a
+  # mis-parse (e.g. a nested-path remote) rather than silently writing a bad
+  # namespace under --apply.
+  case "$NEW_OWNER" in
+    *[!A-Za-z0-9-]*) echo "ERROR: auto-detected owner '$NEW_OWNER' from origin '$origin' is not a plausible GitHub owner; pass --new-owner explicitly" >&2; exit 2 ;;
+  esac
 fi
 [ "$NEW_OWNER" != "$OLD_OWNER" ] || { echo "ERROR: new-owner == old-owner ($OLD_OWNER); nothing to do" >&2; exit 2; }
 
@@ -108,7 +114,13 @@ if [ "$ASSUME_YES" -eq 0 ]; then
 fi
 
 for f in "${TARGETS[@]}"; do
-  cp "$f" "$f.bak"
+  # Preserve the earliest (pre-rewrite) backup: never clobber an existing .bak,
+  # or a second --apply would overwrite the true original with rewritten content.
+  if [ -e "$f.bak" ]; then
+    echo "==> $f.bak already exists — keeping it as the original backup"
+  else
+    cp "$f" "$f.bak"
+  fi
   sed -i "s#${OLD}#${NEW}#g" "$f"
   echo "==> rewrote $f (backup: $f.bak)"
 done
