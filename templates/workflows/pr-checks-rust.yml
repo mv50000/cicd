@@ -1,0 +1,42 @@
+# Blacksmith-first PR checks for a Rust repo (RK9-38 template).
+# Copy to .github/workflows/pr-checks.yml and adjust job set to your crate.
+# Sizing heuristic (RK9-38): Rust compile/test -> 8vcpu, lint/clippy -> 4vcpu, fmt -> 2vcpu.
+# Blacksmith's transparent cache accelerates Swatinem/rust-cache@v2 unchanged.
+name: PR Checks
+on:
+  pull_request:
+    # Path-filter (RK9-33): heavy Rust jobs skip docs-only PRs. Tune to your tree.
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/pr-checks.yml'
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  fmt:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add rustfmt
+      - run: cargo fmt --all --check
+  clippy:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add clippy
+      - run: cargo clippy --all-targets -- -D warnings
+  check:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+  test:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all

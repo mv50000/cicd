@@ -1,0 +1,76 @@
+# AI auto-merge (RK9-38 template): conclusion-gate + protected-path gate.
+# Copy to .github/workflows/ai-auto-merge.yml + add .github/CODEOWNERS (see below).
+# Decisions baked in:
+#  - CONCLUSION-GATE (RK9-30): the single required workflow is "PR Checks". No label.
+#  - AUTHOR_ALLOWLIST: only AI-agent PRs (the account that opens worktree PRs) auto-merge.
+#  - PROTECTED-PATH GATE (RK9-40 / QUA-522): PRs touching protected paths need a human
+#    (non-bot) approving review on the head SHA before auto-merge.
+# Customize: REQUIRED base branch (main/master), AUTHOR_ALLOWLIST, deploy dispatch wf.
+name: AI Auto Merge (Squash)
+on:
+  workflow_run:
+    workflows: ["PR Checks"]
+    types: [completed]
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: ai-auto-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+jobs:
+  auto-merge:
+    runs-on: self-hosted
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0].number != null
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner, repo = context.repo.repo;
+            const wr = context.payload.workflow_run;
+            const BASE = 'main';                       // <-- customize (main/master)
+            const AUTHOR_ALLOWLIST = ['mv50000'];      // <-- AI-agent account(s)
+            const REQUIRED_WORKFLOW = 'PR Checks';
+            if (wr.name !== REQUIRED_WORKFLOW || wr.conclusion !== 'success') {
+              core.info(`'${wr.name}' conclusion=${wr.conclusion} -> skip.`); return;
+            }
+            const prRef = wr.pull_requests?.[0];
+            if (!prRef?.number) { core.info('No PR attached -> skip.'); return; }
+            const prNumber = prRef.number;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+            if (pr.state !== 'open' || pr.draft) { core.info(`PR #${prNumber} not mergeable -> skip.`); return; }
+            if (pr.base.ref !== BASE) { core.info(`base ${pr.base.ref} != ${BASE} -> skip.`); return; }
+            if (!AUTHOR_ALLOWLIST.includes(pr.user?.login)) { core.info(`author ${pr.user?.login} not allowed -> skip.`); return; }
+            if (wr.head_sha !== pr.head.sha) { core.info(`stale: ran on ${wr.head_sha}, head ${pr.head.sha} -> skip.`); return; }
+
+            // RK9-40 (QUA-522) protected-path gate. Mirrors .github/CODEOWNERS.
+            const protectedPatterns = [
+              /^\.github\/workflows\//, /^\.github\/CODEOWNERS$/, /^deploy\//,
+              /^migrations\//, /^prisma\/schema\.prisma$/, /^prisma\/migrations\//, /^backend\/migrations\//,
+            ];
+            const _files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: prNumber, per_page: 100 });
+            const _touched = new Set();
+            for (const f of _files) { _touched.add(f.filename); if (f.previous_filename) _touched.add(f.previous_filename); }
+            const _protectedFiles = [..._touched].filter((n) => protectedPatterns.some((re) => re.test(n))).sort();
+            if (_protectedFiles.length > 0) {
+              const _reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: prNumber, per_page: 100 });
+              const _ok = _reviews.some((r) => r.state === 'APPROVED' && r.user?.type === 'User' && r.commit_id === pr.head.sha);
+              if (!_ok) {
+                core.info(`PR #${prNumber} touches protected paths without human approval -> skip.`);
+                const _m = '<!-- ai-auto-merge:protected-paths -->';
+                const _cs = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: prNumber, per_page: 100 });
+                if (!_cs.some((c) => c.body?.includes(_m))) {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body: [_m, '**Auto-merge paused: protected paths touched (RK9-40)**', '', 'Needs a human approving review before auto-merge:', '', ..._protectedFiles.map((f) => `- \`${f}\``)].join('\n') });
+                }
+                return;
+              }
+            }
+            const result = await github.rest.pulls.merge({ owner, repo, pull_number: prNumber, merge_method: 'squash',
+              commit_title: `Auto-merge PR #${prNumber} (CI green + AI pipeline)` });
+            core.info(`Merged PR #${prNumber}: ${result.data.sha}`);
+            for (const wf of ['deploy-dev.yml']) {   // <-- customize / remove if no dev deploy
+              try { await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: wf, ref: BASE }); }
+              catch (e) { core.warning(`dispatch ${wf}: ${e.message}`); }
+            }
