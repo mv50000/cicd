@@ -71,6 +71,8 @@ jobs:
 - `scripts/server-bootstrap.sh <company> <env>` — luo `/srv/{co}/{env}/`-rakenteen, asentaa Dockerin tarvittaessa, lisää deploy-userin
 - `scripts/rollback.sh <company> <env>` — palaa `previous-tag`-tagiin
 - `scripts/healthcheck.sh <url>` — pollaa health-endpointia konfiguroidulla timeoutilla
+- `scripts/post-transfer-check.sh <owner/repo> [clone-polku]` — GitHub org-siirron jälkeinen per-repo-tarkistus (runnerit, webhookit, jäännös-`ghcr.io/mv50000`-viittaukset, lokaalin kloonin remote). Ks. [docs/org-transfer-fallout.md](docs/org-transfer-fallout.md)
+- `scripts/ghcr-rewrite-apply.sh <repo-polku> [--new-owner O] [--apply]` — GHCR-namespacen uudelleenkirjoitus org-siirron jälkeen (dry-run-diff oletuksena, `--apply` kuittauksella). Ks. [docs/org-transfer-fallout.md](docs/org-transfer-fallout.md)
 
 ## Versiointi
 
