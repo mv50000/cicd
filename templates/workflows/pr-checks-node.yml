@@ -1,0 +1,36 @@
+# Blacksmith-first PR checks for a Node/Next repo (RK9-38 template).
+# Copy to .github/workflows/pr-checks.yml. Sizing: node build/test/lint -> 4vcpu.
+# setup-node's npm cache is accelerated by Blacksmith's transparent cache.
+# NOTE: any job that hits a dev host (e.g. Playwright against <app>-dev.rk9.fi)
+# MUST stay on [self-hosted] — the nginx dev-proxy 403s cloud IPs (RK9-37). Keep
+# only self-contained jobs (local SQLite, ephemeral DB) on Blacksmith.
+name: PR Checks
+on:
+  pull_request: {}
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: Build & Lint
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+  test:
+    name: Test (self-contained)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test

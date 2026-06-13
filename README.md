@@ -84,3 +84,6 @@ MIT.
 
 ## Deploy-runner policy (RK9-37)
 Deploy jobs that contact a host must be self-hosted (dev-proxy 403s cloud IPs). See [docs/deploy-runner-policy.md](docs/deploy-runner-policy.md); enforced by `scripts/check-deploy-labels.py` + reusable `.github/workflows/guard-deploy-labels.yml`.
+
+## Blacksmith CI onboarding (RK9-38)
+New repo → Blacksmith-first CI in <30 min: see [ONBOARDING-BLACKSMITH.md](ONBOARDING-BLACKSMITH.md). Templates in `templates/workflows/` (pr-checks-rust, pr-checks-node, ai-auto-merge with conclusion+protected-path gate, deploy-stub). cicd stays public: [docs/DECISION-cicd-public.md](docs/DECISION-cicd-public.md).

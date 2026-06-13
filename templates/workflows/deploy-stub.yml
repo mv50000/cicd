@@ -1,0 +1,32 @@
+# Deploy stub (RK9-38 template). Deploy jobs MUST be self-hosted — the nginx
+# dev-proxy 403s cloud runner IPs and SSH keys live on the hosts (RK9-37).
+# Enforcement is owned by the deploy-runner guard (RK9-37): wire
+# `guard-deploy-labels.yml` into your pr-checks; this stub does NOT reimplement it.
+# Prefer the cicd build-and-deploy reusable, which pins the runner via runner_label.
+name: Deploy to Dev
+on:
+  push:
+    branches: [main]      # <-- customize (main/master)
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  packages: write
+jobs:
+  deploy:
+    # Build MAY run on Blacksmith inside the reusable; the host-contacting deploy
+    # step is pinned self-hosted via runner_label. Do NOT pass a cloud runner_label.
+    uses: mv50000/cicd/.github/workflows/build-and-deploy.yml@v1
+    with:
+      company: REPLACE_ME
+      environment: dev
+      image_name: ghcr.io/rk9-ai/REPLACE_ME
+      deploy_host: docker.rk9.fi
+      deploy_path: /srv/REPLACE_ME/dev
+      health_url: http://localhost:3000/api/health
+      runner_label: docker            # self-hosted label — NEVER a blacksmith-* label
+    secrets:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+  # Optional but recommended: guard that fails PRs putting deploy on a cloud runner.
+  # Add to pr-checks.yml instead:
+  #   deploy-guard:
+  #     uses: mv50000/cicd/.github/workflows/guard-deploy-labels.yml@v1
