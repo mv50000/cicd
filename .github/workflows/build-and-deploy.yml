@@ -1,5 +1,13 @@
 name: Build and Deploy
 
+# Split pipeline: the image is BUILT on a cloud runner (Blacksmith) and only
+# PULLED + restarted on a self-hosted runner that can reach the deploy host over
+# the LAN. This keeps heavy `docker build` / `cargo build` memory off the
+# Proxmox host (paperclip-01) — see RK9 chronic-overcommit fix.
+#
+#   build  -> build_runner  (Blacksmith, cloud)        : docker build + push to GHCR
+#   deploy -> runner_label  (self-hosted, LAN-reach)   : compose pull + up + health
+
 on:
   workflow_call:
     inputs:
@@ -55,10 +63,22 @@ on:
         type: number
         required: false
         default: 60
+      build_runner:
+        type: string
+        required: false
+        default: blacksmith-4vcpu-ubuntu-2404
+        description: >-
+          Runner for the cloud BUILD job. Builds always run on Blacksmith so they
+          never consume self-hosted host memory. Override for heavier builds, e.g.
+          blacksmith-8vcpu-ubuntu-2404 for Rust.
       runner_label:
         type: string
         required: false
         default: self-hosted
+        description: >-
+          Self-hosted runner for the DEPLOY job ONLY. Must be able to reach
+          deploy_host over SSH on the LAN. The build runs on build_runner
+          (Blacksmith), not here.
     secrets:
       DEPLOY_SSH_KEY:
         required: true
@@ -67,7 +87,7 @@ on:
     outputs:
       image_tag:
         description: "Pushed image tag (sha-XXXXXXX)"
-        value: ${{ jobs.deploy.outputs.image_tag }}
+        value: ${{ jobs.build.outputs.image_tag }}
       health_status:
         description: "ok | degraded | failed"
         value: ${{ jobs.deploy.outputs.health_status }}
@@ -77,16 +97,16 @@ permissions:
   packages: write
 
 jobs:
-  deploy:
-    name: ${{ inputs.company }}/${{ inputs.environment }}
-    runs-on: ${{ inputs.runner_label == 'self-hosted' && fromJSON('["self-hosted","paperclip"]') || fromJSON(format('["{0}"]', inputs.runner_label)) }}
-    timeout-minutes: 30
+  build:
+    name: build ${{ inputs.company }}/${{ inputs.environment }}
+    runs-on: ${{ inputs.build_runner }}
+    timeout-minutes: 45
     concurrency:
-      group: deploy-${{ inputs.company }}-${{ inputs.environment }}
-      cancel-in-progress: false
+      group: build-${{ inputs.company }}-${{ inputs.environment }}-${{ github.ref }}
+      cancel-in-progress: true
     outputs:
       image_tag: ${{ steps.build.outputs.image_tag }}
-      health_status: ${{ steps.health.outputs.status }}
+      full_image: ${{ steps.build.outputs.full_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,6 +125,20 @@ jobs:
           environment: ${{ inputs.environment }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+  deploy:
+    name: deploy ${{ inputs.company }}/${{ inputs.environment }}
+    needs: build
+    runs-on: ${{ inputs.runner_label == 'self-hosted' && fromJSON('["self-hosted","paperclip"]') || fromJSON(format('["{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-${{ inputs.company }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      health_status: ${{ steps.health.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: SSH deploy to ${{ inputs.deploy_host }}
         id: deploy
         uses: mv50000/cicd/actions/ssh-deploy@v1
@@ -113,7 +147,7 @@ jobs:
           deploy_user: ${{ inputs.deploy_user }}
           deploy_path: ${{ inputs.deploy_path }}
           compose_file: ${{ inputs.compose_file }}
-          image_tag: ${{ steps.build.outputs.image_tag }}
+          image_tag: ${{ needs.build.outputs.image_tag }}
           ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
           registry_username: ${{ github.actor }}
           registry_password: ${{ secrets.GITHUB_TOKEN }}
@@ -140,6 +174,9 @@ jobs:
           ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
 
       - name: Notify Slack
+        # NOTE: fires for the deploy job. A build-job failure skips deploy (needs:
+        # build) and so won't Slack — add a top-level notify job if/when callers
+        # actually wire SLACK_WEBHOOK_URL (no current caller passes it).
         if: always() && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -148,7 +185,7 @@ jobs:
           company: ${{ inputs.company }}
           environment: ${{ inputs.environment }}
           status: ${{ job.status }}
-          image_tag: ${{ steps.build.outputs.image_tag }}
+          image_tag: ${{ needs.build.outputs.image_tag }}
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
 
       - name: Fail job if health failed
