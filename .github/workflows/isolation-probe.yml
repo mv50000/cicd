@@ -1,0 +1,29 @@
+# RK9-213 runner isolation probe (reusable). Asserts a self-hosted runner is NOT
+# root-equivalent: no passwordless sudo, not in the docker group, not root, and
+# cannot read the operator's private trees (/home/rk9admin, /var/lib/paperclip).
+# The acceptance verifier for RK9-204 (self-hosted CI de-rooting).
+#
+# Usage in a consumer repo:
+#   jobs:
+#     isolation:
+#       uses: mv50000/cicd/.github/workflows/isolation-probe.yml@v3
+#       with:
+#         runs_on: '["self-hosted","paperclip-01"]'
+name: Runner isolation probe
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: JSON array of runner labels to target (e.g. '["self-hosted","docker"]')
+        required: true
+        type: string
+permissions: {}
+jobs:
+  probe:
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Fetch isolation check from cicd
+        run: curl -fsSL -o /tmp/check-isolation.sh https://raw.githubusercontent.com/mv50000/cicd/v3/scripts/check-isolation.sh
+      - name: Assert runner isolation
+        run: bash /tmp/check-isolation.sh
