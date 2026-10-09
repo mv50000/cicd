@@ -76,9 +76,18 @@ on:
         required: false
         default: 45
         description: >-
-          timeout-minutes for the BUILD job (RK9-430). Raise it for slow builds
-          so the job is not cancelled while the cache export still runs after
-          the image push.
+          timeout-minutes for the image build-and-push STEP (RK9-430). The GHA
+          cache export is a separate step after it and does not use this
+          budget. Keep build_timeout_minutes + cache_export_timeout_minutes
+          under 220 (the build job ceiling is 240).
+      cache_export_timeout_minutes:
+        type: number
+        required: false
+        default: 15
+        description: >-
+          timeout-minutes for the best-effort GHA cache export step (RK9-430).
+          The step has continue-on-error, so a slow or failed export never
+          fails the build job and never blocks the deploy job.
       cache_mode:
         type: string
         required: false
@@ -115,7 +124,9 @@ jobs:
   build:
     name: build ${{ inputs.company }}/${{ inputs.environment }}
     runs-on: ${{ inputs.build_runner }}
-    timeout-minutes: ${{ inputs.build_timeout_minutes }}
+    # Ceiling only (RK9-430). The real limits are the per-step timeouts below,
+    # so the cache export can never use up the job budget after the push.
+    timeout-minutes: 240
     concurrency:
       group: build-${{ inputs.company }}-${{ inputs.environment }}-${{ github.ref }}
       cancel-in-progress: true
@@ -124,15 +135,18 @@ jobs:
       full_image: ${{ steps.build.outputs.full_image }}
     steps:
       - name: Checkout
+        timeout-minutes: 10
         uses: actions/checkout@v4
 
       - name: Set up toolchain
+        timeout-minutes: 10
         uses: mv50000/cicd/actions/setup-toolchain@v1
 
       - name: Build and push Docker image
         id: build
+        timeout-minutes: ${{ inputs.build_timeout_minutes }}
         # @v4 (RK9-430): the first tag whose docker-build-push has
-        # cache_mode + ignore-error=true. v1/v2/v3 stay unchanged.
+        # cache_export + cache_mode. v1/v2/v3 stay unchanged.
         uses: mv50000/cicd/actions/docker-build-push@v4
         with:
           image_name: ${{ inputs.image_name }}
@@ -141,7 +155,30 @@ jobs:
           build_args: ${{ inputs.build_args }}
           environment: ${{ inputs.environment }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          cache_mode: ${{ inputs.cache_mode }}
+          # The cache export runs in the next step, not inside the push step.
+          cache_export: "false"
+
+      # RK9-430: the image is already in GHCR here. Re-solve the same build on
+      # the same buildx builder (every step is a local cache hit) and export
+      # only the GHA cache. continue-on-error + its own timeout mean a slow or
+      # failed export ends this step, not the job, so deploy always runs.
+      # Keep context/file/build-args/scope identical to docker-build-push, or
+      # the re-solve misses the local cache and rebuilds until the timeout.
+      - name: Export build cache (best effort)
+        timeout-minutes: ${{ inputs.cache_export_timeout_minutes }}
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.build_context }}/${{ inputs.dockerfile }}
+          build-args: ${{ inputs.build_args }}
+          push: false
+          outputs: type=cacheonly
+          # No image is exported, so there is nothing to attest.
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ github.repository }}-${{ inputs.environment }}
+          cache-to: type=gha,scope=${{ github.repository }}-${{ inputs.environment }},mode=${{ inputs.cache_mode }},ignore-error=true
 
   deploy:
     name: deploy ${{ inputs.company }}/${{ inputs.environment }}

@@ -26,6 +26,15 @@ inputs:
       GHA cache export mode: max (all layers, default) or min (final image
       layers only, much faster export). The export uses ignore-error=true, so a
       failed export never fails the build after the image has been pushed.
+  cache_export:
+    required: false
+    default: "true"
+    description: >-
+      "true" (default) exports the GHA cache inside this build-push step.
+      "false" pushes the image without a cache export (RK9-430). The caller
+      then runs the export as its own step, with its own timeout-minutes and
+      continue-on-error, so a slow export can never cancel the job after the
+      image push. build-and-deploy.yml does this.
 
 outputs:
   image_tag:
@@ -82,8 +91,9 @@ runs:
         build-args: ${{ inputs.build_args }}
         cache-from: type=gha,scope=${{ github.repository }}-${{ inputs.environment }}
         # ignore-error=true (RK9-430): a failed cache export must not fail the
-        # step once the image is already pushed to GHCR.
-        cache-to: type=gha,scope=${{ github.repository }}-${{ inputs.environment }},mode=${{ inputs.cache_mode }},ignore-error=true
+        # step once the image is already pushed to GHCR. With cache_export
+        # "false" the cache-to is empty and the caller exports separately.
+        cache-to: ${{ inputs.cache_export == 'true' && format('type=gha,scope={0}-{1},mode={2},ignore-error=true', github.repository, inputs.environment, inputs.cache_mode) || '' }}
         labels: |
           org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
