@@ -86,5 +86,6 @@ bash /srv/<company>/prod/rollback.sh <company> prod
 ## Yleisiä ongelmia
 
 - **Health timeout**: kasvata `health_timeout_s` deploy-workflow-kutsussa, oletus on 60 s. Esim. Rust-kontti voi tarvita 90–120 s ensimmäiseen requestiin.
+- **Build-job aikakatkaistaan välimuistin viennin aikana** (RK9-430, `@v4`): image on jo GHCR:ssä, mutta vaihe `exporting to GitHub Actions Cache` jatkuu, kunnes job-tason aikaraja katkaisee sen. Nosta `build_timeout_minutes` (oletus 45) tai vaihda `cache_mode: min` (oletus `max`), jolloin vain lopullisen imagen kerrokset viedään. Viennin virhe ei enää kaada buildia (`ignore-error=true`), mutta hidas vienti kuluttaa yhä aikarajaa.
 - **GHCR pull failure deploy-hostilla**: tarkista `docker login ghcr.io` deploy-userina (`docker login ghcr.io -u <gh-user> -p <pat-with-read:packages>`).
 - **rsync error**: deploy-userilla pitää olla kirjoitusoikeus `${deploy_path}`-kansioon. Suorita `chown -R deploy:deploy /srv/<company>`.

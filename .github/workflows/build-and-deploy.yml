@@ -71,6 +71,21 @@ on:
           Runner for the cloud BUILD job. Builds always run on Blacksmith so they
           never consume self-hosted host memory. Override for heavier builds, e.g.
           blacksmith-8vcpu-ubuntu-2404 for Rust.
+      build_timeout_minutes:
+        type: number
+        required: false
+        default: 45
+        description: >-
+          timeout-minutes for the BUILD job (RK9-430). Raise it for slow builds
+          so the job is not cancelled while the cache export still runs after
+          the image push.
+      cache_mode:
+        type: string
+        required: false
+        default: max
+        description: >-
+          GHA cache export mode for docker-build-push: max (default) or min.
+          min exports only the final image layers, so the export is much faster.
       runner_label:
         type: string
         required: false
@@ -100,7 +115,7 @@ jobs:
   build:
     name: build ${{ inputs.company }}/${{ inputs.environment }}
     runs-on: ${{ inputs.build_runner }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.build_timeout_minutes }}
     concurrency:
       group: build-${{ inputs.company }}-${{ inputs.environment }}-${{ github.ref }}
       cancel-in-progress: true
@@ -116,7 +131,9 @@ jobs:
 
       - name: Build and push Docker image
         id: build
-        uses: mv50000/cicd/actions/docker-build-push@v1
+        # @v4 (RK9-430): the first tag whose docker-build-push has
+        # cache_mode + ignore-error=true. v1/v2/v3 stay unchanged.
+        uses: mv50000/cicd/actions/docker-build-push@v4
         with:
           image_name: ${{ inputs.image_name }}
           dockerfile: ${{ inputs.dockerfile }}
@@ -124,6 +141,7 @@ jobs:
           build_args: ${{ inputs.build_args }}
           environment: ${{ inputs.environment }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          cache_mode: ${{ inputs.cache_mode }}
 
   deploy:
     name: deploy ${{ inputs.company }}/${{ inputs.environment }}

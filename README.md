@@ -78,6 +78,8 @@ jobs:
 
 Tagit `v1`, `v2`, ... rolling — `v1` osoittaa aina viimeiseen v1-yhteensopivaan committiin. Yritykset pinnaavat `@v1` saadakseen rolling-päivitykset, tai `@v1.4.2` lukitakseen tarkan version.
 
+**v4 (RK9-430):** `build-and-deploy.yml` saa inputit `build_timeout_minutes` (oletus 45) ja `cache_mode` (`max`/`min`, oletus `max`). `docker-build-push` vie GHA-välimuistin asetuksella `ignore-error=true`, joten viennin virhe ei kaada buildia imagen pushin jälkeen. `v1`–`v3` pysyvät ennallaan; kuluttaja siirtyy nostamalla pinnin `@v4`:ään.
+
 ## Lisenssi
 
 MIT.

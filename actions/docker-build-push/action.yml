@@ -19,6 +19,13 @@ inputs:
     description: "dev | prod (becomes :env-{environment} pointer tag)"
   github_token:
     required: true
+  cache_mode:
+    required: false
+    default: max
+    description: >-
+      GHA cache export mode: max (all layers, default) or min (final image
+      layers only, much faster export). The export uses ignore-error=true, so a
+      failed export never fails the build after the image has been pushed.
 
 outputs:
   image_tag:
@@ -74,7 +81,9 @@ runs:
         tags: ${{ steps.compute.outputs.tags }}
         build-args: ${{ inputs.build_args }}
         cache-from: type=gha,scope=${{ github.repository }}-${{ inputs.environment }}
-        cache-to: type=gha,scope=${{ github.repository }}-${{ inputs.environment }},mode=max
+        # ignore-error=true (RK9-430): a failed cache export must not fail the
+        # step once the image is already pushed to GHCR.
+        cache-to: type=gha,scope=${{ github.repository }}-${{ inputs.environment }},mode=${{ inputs.cache_mode }},ignore-error=true
         labels: |
           org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
