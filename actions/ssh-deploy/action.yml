@@ -114,12 +114,18 @@ runs:
         # Initialize tag history files if missing
         touch current-tag previous-tag
 
-        # Update .env with new IMAGE_TAG (preserve other variables)
-        if [ -f .env ]; then
-          grep -v '^IMAGE_TAG=' .env > .env.tmp 2>/dev/null || true
-          mv .env.tmp .env
-        fi
-        echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+        # Update .env with new IMAGE_TAG (preserve other variables).
+        # .env holds secrets: write it owner-only (RK9-503). Without the umask
+        # the rewrite took the deploy user's umask (002) and left the file 664.
+        (
+          umask 077
+          if [ -f .env ]; then
+            grep -v '^IMAGE_TAG=' .env > .env.tmp 2>/dev/null || true
+            mv .env.tmp .env
+          fi
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+        )
+        chmod 600 .env
 
         # Log in to registry with a short-lived token (no persistent creds on disk)
         LOGGED_IN=0
