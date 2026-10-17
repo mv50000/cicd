@@ -47,7 +47,7 @@ jobs:
           load: true
           tags: paperclip-pr-build:${{ github.sha }}
           cache-from: type=gha,scope=${{ github.repository }}-pr
-          cache-to: type=gha,scope=${{ github.repository }}-pr,mode=max
+          cache-to: type=gha,scope=${{ github.repository }}-pr,mode=max,ignore-error=true
 
       - name: Run test command in built image
         if: inputs.test_command != ''

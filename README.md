@@ -78,6 +78,8 @@ jobs:
 
 Tagit `v1`, `v2`, ... rolling — `v1` osoittaa aina viimeiseen v1-yhteensopivaan committiin. Yritykset pinnaavat `@v1` saadakseen rolling-päivitykset, tai `@v1.4.2` lukitakseen tarkan version.
 
+**v4 (RK9-430):** `build-and-deploy.yml` vie GHA-välimuistin omassa vaiheessaan imagen pushin jälkeen. Vaiheella on `continue-on-error` ja oma aikaraja `cache_export_timeout_minutes` (oletus 15), joten hidas tai epäonnistunut vienti ei kaada build-jobia eikä estä deploy-jobia. `build_timeout_minutes` (oletus 45) rajaa nyt vain build-and-push-vaiheen, ja job-tason katto on 240 min. `cache_mode` (`max`/`min`, oletus `max`) valitsee viennin laajuuden. `docker-build-push` saa inputit `cache_export` (oletus `"true"`, vienti push-vaiheen sisällä asetuksella `ignore-error=true`) ja `cache_mode`. `v1`–`v3` pysyvät ennallaan; kuluttaja siirtyy nostamalla pinnin `@v4`:ään.
+
 ## Lisenssi
 
 MIT.
