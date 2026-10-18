@@ -48,7 +48,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: SSH rollback
-        uses: mv50000/cicd/actions/ssh-deploy@v1
+        uses: mv50000/cicd/actions/ssh-deploy@v4
         with:
           deploy_host: ${{ inputs.deploy_host }}
           deploy_user: ${{ inputs.deploy_user }}
@@ -60,7 +60,7 @@ jobs:
           registry_password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Wait for health
-        uses: mv50000/cicd/actions/wait-for-health@v1
+        uses: mv50000/cicd/actions/wait-for-health@v4
         with:
           health_url: ${{ inputs.health_url }}
           timeout_s: 60

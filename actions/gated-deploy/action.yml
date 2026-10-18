@@ -1,0 +1,272 @@
+name: Gated deploy
+description: >-
+  Send ONE verb of the server-side deploy-gate contract v1 (deploy <tag> |
+  health | rollback | status) over a single SSH call to a forced-command key.
+  No file sync, no remote shell: the request string is the whole remote command.
+  The registry token goes to the ssh process stdin only. The key and the
+  pinned known_hosts live in mktemp files under $RUNNER_TEMP and are removed
+  in an always() step.
+
+inputs:
+  verb:
+    required: true
+    description: "deploy | health | rollback | status"
+  image_tag:
+    required: false
+    default: ""
+    description: "deploy only: sha-<7..40 hex>"
+  gate_host:
+    required: true
+    description: "Deploy host that runs the gate"
+  gate_user:
+    required: false
+    default: deploy
+  gate_port:
+    required: false
+    default: "22"
+  ssh_key:
+    required: true
+    description: "Private key whose authorized_keys line forces the gate command"
+  known_hosts:
+    required: true
+    description: >-
+      Pinned known_hosts line(s) for gate_host. Required: there is no
+      host key scanning fallback (no TOFU).
+  registry_token:
+    required: false
+    default: ""
+    description: >-
+      deploy only: short-lived registry pull token (typically GITHUB_TOKEN with
+      packages: read). Sent on stdin, never on the command line. Empty = the
+      gate skips registry login.
+  health_timeout_s:
+    required: false
+    default: "60"
+    description: "health only: poll the health verb until ok or this many seconds"
+  health_interval_s:
+    required: false
+    default: "3"
+
+outputs:
+  exit_code:
+    description: "Gate exit code: 0 ok, 1 failed, 2 rejected, 70 audit failed, 255 ssh"
+    value: ${{ steps.call.outputs.exit_code }}
+  response:
+    description: "The gate's single JSON response line"
+    value: ${{ steps.call.outputs.response }}
+  ok:
+    description: "true | false"
+    value: ${{ steps.call.outputs.ok }}
+  changed:
+    description: "deploy only: true when the gate switched to a new tag"
+    value: ${{ steps.call.outputs.changed }}
+  status:
+    description: "health only: ok | failed (gate reported unhealthy) | error (rejected or unreachable)"
+    value: ${{ steps.call.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare gate call
+      id: prep
+      shell: bash
+      env:
+        VERB: ${{ inputs.verb }}
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        GATE_HOST: ${{ inputs.gate_host }}
+        GATE_USER: ${{ inputs.gate_user }}
+        GATE_PORT: ${{ inputs.gate_port }}
+        HEALTH_TIMEOUT: ${{ inputs.health_timeout_s }}
+        HEALTH_INTERVAL: ${{ inputs.health_interval_s }}
+        _SSH_KEY: ${{ inputs.ssh_key }}
+        _KNOWN_HOSTS: ${{ inputs.known_hosts }}
+        _REGISTRY_TOKEN: ${{ inputs.registry_token }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::gated-deploy: $*"; exit 1; }
+
+        case "$VERB" in
+          deploy|health|rollback|status) ;;
+          *) fail "verb must be deploy, health, rollback or status" ;;
+        esac
+        if [ "$VERB" = deploy ]; then
+          [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{7,40}$ ]] || fail "image_tag must match ^sha-[0-9a-f]{7,40}\$"
+          if [ -n "$_REGISTRY_TOKEN" ]; then
+            # Same shape the gate accepts; checked here so a bad token never leaves the runner.
+            [[ "$_REGISTRY_TOKEN" =~ ^[A-Za-z0-9_.-]{1,8000}$ ]] || fail "registry_token has an unexpected format"
+          fi
+        fi
+        [[ "$GATE_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail "gate_host must be a plain host name or IPv4 address"
+        [[ "$GATE_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "gate_user is not a valid user name"
+        [[ "$GATE_PORT" =~ ^[0-9]{1,5}$ ]] || fail "gate_port must be numeric"
+        [[ "$HEALTH_TIMEOUT" =~ ^[0-9]{1,4}$ ]] || fail "health_timeout_s must be numeric"
+        [[ "$HEALTH_INTERVAL" =~ ^[0-9]{1,3}$ ]] && [ "$HEALTH_INTERVAL" -ge 1 ] || fail "health_interval_s must be 1..999"
+        [ -n "$_SSH_KEY" ] || fail "ssh_key is empty (gate key secret missing?)"
+        printf '%s\n' "$_KNOWN_HOSTS" \
+          | grep -Eq '^[^#[:space:]]+[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)[[:space:]]+[A-Za-z0-9+/]+=*([[:space:]]|$)' \
+          || fail "known_hosts has no pinned host key line; the gate host key must be pinned (no host key scanning, no TOFU)"
+        [ -n "${RUNNER_TEMP:-}" ] && [ -d "$RUNNER_TEMP" ] || fail "RUNNER_TEMP is not set"
+        # Best effort only: other cloud runners register as self-hosted. The
+        # real runner control is the caller's runs-on (lan-deploy) and the guard.
+        [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] || fail "refusing to put the gate key on a GitHub-hosted runner"
+
+        umask 077
+        KEY_FILE=$(mktemp -p "$RUNNER_TEMP" gated-deploy-key.XXXXXXXX)
+        echo "key_file=$KEY_FILE" >> "$GITHUB_OUTPUT"
+        KH_FILE=$(mktemp -p "$RUNNER_TEMP" gated-deploy-known-hosts.XXXXXXXX)
+        echo "kh_file=$KH_FILE" >> "$GITHUB_OUTPUT"
+        printf '%s\n' "$_SSH_KEY" > "$KEY_FILE"
+        printf '%s\n' "$_KNOWN_HOSTS" > "$KH_FILE"
+        chmod 600 "$KEY_FILE" "$KH_FILE"
+
+    - name: Gate ${{ inputs.verb }}
+      id: call
+      shell: bash
+      env:
+        VERB: ${{ inputs.verb }}
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        GATE_HOST: ${{ inputs.gate_host }}
+        GATE_USER: ${{ inputs.gate_user }}
+        GATE_PORT: ${{ inputs.gate_port }}
+        HEALTH_TIMEOUT: ${{ inputs.health_timeout_s }}
+        HEALTH_INTERVAL: ${{ inputs.health_interval_s }}
+        KEY_FILE: ${{ steps.prep.outputs.key_file }}
+        KH_FILE: ${{ steps.prep.outputs.kh_file }}
+        _REGISTRY_TOKEN: ${{ inputs.registry_token }}
+      run: |
+        # GitHub runs bash with -e; the gate's exit code is data here.
+        set +e -uo pipefail
+        ERR_FILE=$(mktemp -p "$RUNNER_TEMP" gated-deploy-stderr.XXXXXXXX)
+        trap 'rm -f "$ERR_FILE"' EXIT
+
+        # -F /dev/null: no user/system ssh_config, so nothing (SendEnv, agents,
+        # forwardings, extra identities) leaks into the call.
+        SSH=(ssh -F /dev/null -T
+          -i "$KEY_FILE" -o IdentitiesOnly=yes -o IdentityAgent=none
+          -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no
+          -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KH_FILE"
+          -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no
+          -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes
+          -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+          -p "$GATE_PORT" -l "$GATE_USER" "$GATE_HOST")
+
+        # Gate output is printed between stop-commands markers, with a prefix
+        # and with the legacy "##[" form defused, so it can never run as a
+        # workflow command.
+        STOP=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+        call_gate() {
+          local request=$1
+          if [[ "$request" == "deploy "* ]] && [ -n "$_REGISTRY_TOKEN" ]; then
+            # The token reaches the remote side only as ssh stdin (a here-string,
+            # so it is on no process command line).
+            RESP=$("${SSH[@]}" "$request" <<<"$_REGISTRY_TOKEN" 2>"$ERR_FILE")
+          else
+            RESP=$("${SSH[@]}" "$request" </dev/null 2>"$ERR_FILE")
+          fi
+          RC=$?
+          RESP=$(printf '%s\n' "$RESP" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 1)
+          echo "::stop-commands::$STOP"
+          echo "gate response (exit $RC): ${RESP//'##['/'# #['}"
+          if [ -s "$ERR_FILE" ]; then
+            sed -e 's/##\[/# #[/g' -e 's/^/ssh stderr: /' "$ERR_FILE" | head -n 20
+          fi
+          echo "::$STOP::"
+        }
+
+        # Success only when the line itself starts with {"ok":true (fail closed).
+        OK_RE='^\{"ok":true[,}]'
+        CHANGED_RE='"changed":true[,}]'
+        emit() {
+          {
+            echo "exit_code=$RC"
+            echo "response=$RESP"
+            if [[ "$RESP" =~ $OK_RE ]]; then echo "ok=true"; else echo "ok=false"; fi
+            if [[ "$RESP" =~ $OK_RE && "$RESP" =~ $CHANGED_RE ]]; then echo "changed=true"; else echo "changed=false"; fi
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        case "$VERB" in
+          deploy)  REQUEST="deploy $IMAGE_TAG" ;;
+          *)       REQUEST="$VERB" ;;
+        esac
+
+        if [ "$VERB" != health ]; then
+          call_gate "$REQUEST"
+          emit
+          if [ "$RC" -ne 0 ] || ! [[ "$RESP" =~ $OK_RE ]]; then
+            case "$RC" in
+              1)   echo "::error::gate $VERB failed (see response). The gate restores the previous state itself; do not call rollback after a failed deploy." ;;
+              2)   echo "::error::gate rejected the request before acting (see reason)" ;;
+              70)  echo "::error::gate could not write its audit line; nothing was done" ;;
+              255) echo "::error::ssh failed (connection, source restriction, key or host key pin)"
+                   if [ "$VERB" = deploy ] || [ "$VERB" = rollback ]; then
+                     # The request may have reached the gate before the drop: log the state.
+                     echo "Querying gate status once to show the state on the host:"
+                     SAVED_RC=$RC; SAVED_RESP=$RESP
+                     call_gate status
+                     RC=$SAVED_RC; RESP=$SAVED_RESP
+                   fi ;;
+              *)   echo "::error::gate $VERB returned exit $RC" ;;
+            esac
+            if [[ "$RESP" == *'"restored":"failed"'* ]]; then
+              echo "::error::gate reports restored=failed: the service may be down, operator action needed"
+            fi
+            exit 1
+          fi
+          exit 0
+        fi
+
+        # health: poll the health verb. Exit 1 = unhealthy (keep polling);
+        # 2/70 = rejected, stop at once; 255 = ssh error, keep polling.
+        DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
+        echo "Polling gate health (timeout ${HEALTH_TIMEOUT}s, interval ${HEALTH_INTERVAL}s)"
+        while :; do
+          call_gate health
+          if [ "$RC" -eq 0 ] && [[ "$RESP" =~ $OK_RE ]]; then
+            emit; echo "status=ok" >> "$GITHUB_OUTPUT"
+            echo "::notice::Gate health OK"
+            exit 0
+          fi
+          if [ "$RC" -eq 2 ] || [ "$RC" -eq 70 ]; then
+            emit; echo "status=error" >> "$GITHUB_OUTPUT"
+            echo "::error::gate rejected the health verb (exit $RC)"
+            exit 1
+          fi
+          [ "$(date +%s)" -lt "$DEADLINE" ] || break
+          sleep "$HEALTH_INTERVAL"
+        done
+        emit
+        if [ "$RC" -eq 1 ]; then
+          echo "status=failed" >> "$GITHUB_OUTPUT"
+          echo "::error::Gate health failed after ${HEALTH_TIMEOUT}s"
+        else
+          echo "status=error" >> "$GITHUB_OUTPUT"
+          echo "::error::Gate health could not be read after ${HEALTH_TIMEOUT}s (exit $RC)"
+        fi
+        # Like wait-for-health: report via the status output, let the caller decide.
+        exit 0
+
+    - name: Remove gate key
+      if: always()
+      shell: bash
+      env:
+        KEY_FILE: ${{ steps.prep.outputs.key_file }}
+        KH_FILE: ${{ steps.prep.outputs.kh_file }}
+      run: |
+        [ -n "$KEY_FILE" ] && rm -f -- "$KEY_FILE"
+        [ -n "$KH_FILE" ] && rm -f -- "$KH_FILE"
+        # Also catch files from a prep step that failed before its outputs were set.
+        rm -f -- "$RUNNER_TEMP"/gated-deploy-key.* "$RUNNER_TEMP"/gated-deploy-known-hosts.*
+        true
+
+    - name: Verify gate key is gone
+      if: always()
+      shell: bash
+      env:
+        KEY_FILE: ${{ steps.prep.outputs.key_file }}
+      run: |
+        ls -la "$RUNNER_TEMP"
+        if { [ -n "$KEY_FILE" ] && [ -e "$KEY_FILE" ]; } || compgen -G "$RUNNER_TEMP/gated-deploy-key.*" >/dev/null; then
+          echo "::error::gate key file still exists in RUNNER_TEMP"
+          exit 1
+        fi

@@ -6,7 +6,7 @@
 # Usage in a consumer repo:
 #   jobs:
 #     isolation:
-#       uses: mv50000/cicd/.github/workflows/isolation-probe.yml@v3
+#       uses: mv50000/cicd/.github/workflows/isolation-probe.yml@v4
 #       with:
 #         runs_on: '["self-hosted","paperclip-01"]'
 name: Runner isolation probe
@@ -24,6 +24,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Fetch isolation check from cicd
-        run: curl -fsSL -o /tmp/check-isolation.sh https://raw.githubusercontent.com/mv50000/cicd/v3/scripts/check-isolation.sh
+        run: curl -fsSL -o /tmp/check-isolation.sh https://raw.githubusercontent.com/mv50000/cicd/refs/tags/v4/scripts/check-isolation.sh
       - name: Assert runner isolation
         run: bash /tmp/check-isolation.sh

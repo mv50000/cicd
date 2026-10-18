@@ -16,11 +16,58 @@ the host). Only **host-contacting** jobs are constrained. The guard
 (`scripts/check-deploy-labels.py`) flags cloud runners **only** on jobs that
 contact a host, so it never false-positives on build jobs.
 
+## Gate mode (v4, RK9-545)
+
+`build-and-deploy.yml@v4` with `deploy_transport: gate` (or a job that uses
+`actions/gated-deploy` directly) talks only to the server-side deploy-gate
+(verb contract v1: `deploy <tag>`, `health`, `rollback`, `status`). The gate
+key is a forced-command key, so the runner never gets a shell on the host.
+
+- **Runner:** gate-mode deploy jobs MUST run on a `lan-deploy` runner
+  (`lan-deploy` or `lan-deploy-<suffix>`; the job uses
+  `[self-hosted, <label>]`). These are the low-privilege, per-repo LAN runners.
+  `runner_label` has no effective default in gate mode: empty, `self-hosted`,
+  `paperclip`, `docker` or a cloud label fails the build job's first step, so the
+  deploy job never queues and the gate key never lands on a shared or cloud
+  runner. The build job references no deploy secrets (only `GITHUB_TOKEN` for
+  the image push); the gate job checks its own secrets first and refuses to
+  run if it also receives `DEPLOY_SSH_KEY` (that stops use, not delivery, so
+  callers name their secrets instead of `secrets: inherit`). The action also
+  refuses GitHub-hosted runners; that is defence in depth only, since other
+  cloud runners register as self-hosted.
+- **Host key:** pinned via the `DEPLOY_GATE_KNOWN_HOSTS` secret. No scanning,
+  no TOFU; a missing pin fails.
+- **Key handling:** `mktemp -p "$RUNNER_TEMP"` (600), removed in an
+  `if: always()` step; the last step fails if the key file still exists.
+- **Registry token:** the job's `GITHUB_TOKEN` (job permissions
+  `packages: read`) goes to ssh stdin only.
+- **Rollback:** a failed `deploy` is restored by the gate itself (`restored`
+  field). The client sends `rollback` only when the post-deploy health poll
+  fails after a deploy that switched the tag (`"changed":true`).
+- **Compose files (K4):** gate mode does not sync `deploy/`. The host owns the
+  compose files; changes go through the operator runbook by hand until a
+  validating sync verb exists.
+- **Manual rollback:** `rollback.yml` stays ssh-only. Gate consumers use their
+  own `workflow_dispatch` job calling `gated-deploy@v4` with `verb: rollback`.
+
 ## Enforcement
 - `scripts/check-deploy-labels.py <repo_dir>` — exit 1 on violation.
 - `.github/workflows/guard-deploy-labels.yml` — reusable; consumer repos call it
   from `pr-checks` to fail PRs that introduce a cloud label on a host-contacting
-  deploy job. **Single enforcement owner (RK9-37)** — the cicd templates'
+  deploy job. The v4 guard fetches the script from the `v4` tag (not `v1`) and
+  also fails gate-mode calls (any `deploy_transport` other than the literal
+  `ssh`) without a literal lan-deploy `runner_label`, and `gated-deploy` jobs
+  whose `runs-on` lacks a literal lan-deploy label. Gate checks scan every
+  workflow file; a file that mentions `gated-deploy@` or a gate
+  `deploy_transport` but yields no parseable gate job is a violation. The
+  RK9-37 checks keep the `deploy*`/`release*` scope.
+- The guard is a text-based, best-effort check, not a YAML parser: unusual
+  layouts (flow-style jobs, anchors/aliases) can still slip past it for a
+  direct `gated-deploy` job (follow-up RK9-569). For reusable-workflow gate
+  calls the build job's runtime check refuses a non-lan-deploy `runner_label`
+  regardless of the guard.
+- `scripts/test_check_deploy_labels.py` — unit tests
+  (`python3 -m unittest discover -s scripts`). **Single enforcement owner (RK9-37)** — the cicd templates'
   deploy-stub references this guard, it does not reimplement it.
 
 ## Audit (2026-06-13) — all host-contacting deploy jobs self-hosted ✓
@@ -36,6 +83,20 @@ contact a host, so it never false-positives on build jobs.
 The cicd `build-and-deploy.yml` reusable pins the deploy job's runner via its
 `runner_label` input (`self-hosted` → `[self-hosted, paperclip]`), so repos using
 the reusable are guarded by construction.
+
+## Audit (2026-10-18, RK9-545) — no consumer on gate mode yet
+
+| Repo | Workflow | cicd ref | Host-contacting deploy job runner | Planned |
+|------|----------|----------|-----------------------------------|---------|
+| saatavilla | deploy-dev | `build-and-deploy.yml@v2` | `runner_label: docker` (ssh mode) | v4 gate + lan-deploy (RK9-546) |
+| bk (Ololla) | deploy-dev | `build-and-deploy.yml@v2` | `runner_label: docker` (ssh mode); seed job `[self-hosted, docker]` | v4 gate + lan-deploy (RK9-218) |
+| alli-audit | deploy-dev | `build-and-deploy.yml@v2` | `runner_label: docker` (ssh mode) | stays on v2 |
+| uutisvertailu | deploy-dev | `build-and-deploy.yml@v2` | `runner_label: docker` (ssh mode) | stays on v2 |
+| sunspot | deploy-dev | `wait-for-health@v3` | `[self-hosted, docker]` | stays on v3 |
+| quantimodo-rust | deploy-dev / deploy-prod | actions `@v1` | `[self-hosted, docker]` | stays on v1 |
+| rk9-site | deploy | `wait-for-health@v1` | `[self-hosted, docker]` | stays on v1 |
+
+v1, v2 and v3 are frozen; none of these consumers changes when v4 ships.
 
 ## /implement runner-offline gate (operator tooling)
 `pcp-wait.sh` / `pcp-unjam.sh` treat a deploy job stuck because its **target
