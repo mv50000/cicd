@@ -58,9 +58,14 @@ key is a forced-command key, so the runner never gets a shell on the host.
   also fails gate-mode calls (any `deploy_transport` other than the literal
   `ssh`) without a literal lan-deploy `runner_label`, and `gated-deploy` jobs
   whose `runs-on` lacks a literal lan-deploy label. Gate checks scan every
-  workflow file and fail closed: a file that mentions `gated-deploy@` or a gate
+  workflow file; a file that mentions `gated-deploy@` or a gate
   `deploy_transport` but yields no parseable gate job is a violation. The
   RK9-37 checks keep the `deploy*`/`release*` scope.
+- The guard is a text-based, best-effort check, not a YAML parser: unusual
+  layouts (flow-style jobs, anchors/aliases) can still slip past it for a
+  direct `gated-deploy` job (follow-up RK9-569). For reusable-workflow gate
+  calls the build job's runtime check refuses a non-lan-deploy `runner_label`
+  regardless of the guard.
 - `scripts/test_check_deploy_labels.py` — unit tests
   (`python3 -m unittest discover -s scripts`). **Single enforcement owner (RK9-37)** — the cicd templates'
   deploy-stub references this guard, it does not reimplement it.

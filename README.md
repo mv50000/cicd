@@ -164,7 +164,7 @@ Gate-tila ei synkkaa repon `deploy/`-hakemistoa hostille. Compose-tiedostot omis
 
 1. Vaihda `build-and-deploy.yml@v2` → `@v4`. Ilman muita muutoksia käytös on sama kuin v2:ssa ja v3:ssa (ssh-tila).
 2. Gate-tilaan: lisää `deploy_transport: gate` ja `runner_label: lan-deploy`, ja anna secretit `DEPLOY_GATE_KEY` ja `DEPLOY_GATE_KNOWN_HOSTS` nimettyinä. Älä anna `DEPLOY_SSH_KEY`tä äläkä käytä `secrets: inherit`iä: gate-jobi failaa silloin.
-3. Jos repo kutsuu `guard-deploy-labels.yml`ää, vaihda sekin `@v4`:ään. Vain v4:n guard tuntee gate-tilan. Se tarkistaa gate-jobit kaikista workflow-tiedostoista, ei vain `deploy*`- ja `release*`-tiedostoista.
+3. Jos repo kutsuu `guard-deploy-labels.yml`ää, vaihda sekin `@v4`:ään. Vain v4:n guard tuntee gate-tilan. Se tarkistaa gate-jobit kaikista workflow-tiedostoista, ei vain `deploy*`- ja `release*`-tiedostoista. Guard on tekstipohjainen best effort -tarkistus. Kirjoita gate-jobit tavallisella block-tyylillä ilman YAML-ankkureita (seuranta RK9-569).
 4. Tarkista, ettei `deploy/`-hakemistossa ole vientiä odottavia compose-muutoksia (K4).
 
 ## Versiointi
