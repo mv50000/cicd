@@ -101,8 +101,9 @@ on:
           DEPLOY_GATE_KEY and DEPLOY_GATE_KNOWN_HOSTS secrets).
     secrets:
       DEPLOY_SSH_KEY:
-        # Required in ssh mode (checked in the build job). Optional in the
-        # schema only so that gate-mode callers do not need a full-shell key.
+        # Needed in ssh mode (the ssh steps fail without it). Optional in the
+        # schema only so that gate-mode callers do not need a full-shell key;
+        # gate mode refuses to run when it is passed.
         required: false
       DEPLOY_GATE_KEY:
         required: false
@@ -137,30 +138,23 @@ jobs:
       full_image: ${{ steps.build.outputs.full_image }}
     steps:
       # Runs before anything else so a bad gate configuration fails here and
-      # the deploy job is never queued. Only booleans about the secrets reach
-      # this (cloud) runner, never their values.
+      # the deploy job is never queued. Inputs only: no secrets are referenced
+      # in this (cloud) job. The gate job checks its secrets itself.
       - name: Validate deploy inputs
         env:
           TRANSPORT: ${{ inputs.deploy_transport }}
           RUNNER_LABEL: ${{ inputs.runner_label }}
-          HAS_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
-          HAS_GATE_KEY: ${{ secrets.DEPLOY_GATE_KEY != '' }}
-          HAS_GATE_KNOWN_HOSTS: ${{ secrets.DEPLOY_GATE_KNOWN_HOSTS != '' }}
+          HEALTH_TIMEOUT: ${{ inputs.health_timeout_s }}
         run: |
           case "$TRANSPORT" in
-            ssh)
-              if [ "$HAS_SSH_KEY" != true ]; then
-                echo "::error::deploy_transport=ssh needs the DEPLOY_SSH_KEY secret"
-                exit 1
-              fi
-              ;;
+            ssh) ;;
             gate)
               if ! [[ "$RUNNER_LABEL" =~ ^lan-deploy(-[a-z0-9]+)*$ ]]; then
                 echo "::error::deploy_transport=gate needs runner_label set to a lan-deploy runner label (got '${RUNNER_LABEL}'). Empty, self-hosted, paperclip, docker and cloud labels are refused so the gate key never lands on a shared or cloud runner."
                 exit 1
               fi
-              if [ "$HAS_GATE_KEY" != true ] || [ "$HAS_GATE_KNOWN_HOSTS" != true ]; then
-                echo "::error::deploy_transport=gate needs the DEPLOY_GATE_KEY and DEPLOY_GATE_KNOWN_HOSTS secrets (host key is pinned, no host key scanning)"
+              if ! [[ "$HEALTH_TIMEOUT" =~ ^[0-9]{1,4}$ ]]; then
+                echo "::error::deploy_transport=gate needs health_timeout_s as a whole number 0..9999 (got '${HEALTH_TIMEOUT}')"
                 exit 1
               fi
               ;;
@@ -275,6 +269,22 @@ jobs:
     outputs:
       health_status: ${{ steps.health.outputs.status }}
     steps:
+      - name: Check gate secrets
+        env:
+          HAS_GATE_KEY: ${{ secrets.DEPLOY_GATE_KEY != '' }}
+          HAS_GATE_KNOWN_HOSTS: ${{ secrets.DEPLOY_GATE_KNOWN_HOSTS != '' }}
+          HAS_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+        run: |
+          if [ "$HAS_GATE_KEY" != true ] || [ "$HAS_GATE_KNOWN_HOSTS" != true ]; then
+            echo "::error::deploy_transport=gate needs the DEPLOY_GATE_KEY and DEPLOY_GATE_KNOWN_HOSTS secrets (host key is pinned, no host key scanning)"
+            exit 1
+          fi
+          # A full-shell key has no business on the gate runner (e.g. secrets: inherit).
+          if [ "$HAS_SSH_KEY" = true ]; then
+            echo "::error::deploy_transport=gate must not receive DEPLOY_SSH_KEY; pass only DEPLOY_GATE_KEY and DEPLOY_GATE_KNOWN_HOSTS (no secrets: inherit)"
+            exit 1
+          fi
+
       # A failed deploy is restored by the gate itself (restored field in the
       # response). The client must NOT call rollback after it: that would go
       # to previous-tag, two versions back.

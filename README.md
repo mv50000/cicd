@@ -114,7 +114,10 @@ Epäonnistunut `deploy` ei käynnistä rollbackia. Gate palauttaa vanhan tilan i
 - Host key pinnataan secretillä `DEPLOY_GATE_KNOWN_HOSTS` (known_hosts-rivi). Skannausta ei ole, ja puuttuva pinni failaa.
 - Avain ja known_hosts kirjoitetaan `mktemp -p "$RUNNER_TEMP"` -tiedostoihin (600). `if: always()` -askel poistaa ne, ja viimeinen askel failaa, jos avaintiedosto on yhä olemassa.
 - ssh ajetaan `-F /dev/null`-asetuksella: käyttäjän tai järjestelmän ssh_config ei vaikuta kutsuun.
-- `runner_label`illa ei ole gate-tilassa oletusta. Arvon on oltava `lan-deploy` tai `lan-deploy-<pääte>`. Tyhjä, `self-hosted`, `paperclip`, `docker` tai pilvilabel failaa build-jobin ensimmäisessä askeleessa, joten deploy-jobi ei mene jonoon.
+- `runner_label`illa ei ole gate-tilassa oletusta. Arvon on oltava `lan-deploy` tai `lan-deploy-<pääte>`. Tyhjä, `self-hosted`, `paperclip`, `docker` tai pilvilabel failaa build-jobin ensimmäisessä askeleessa, joten deploy-jobi ei mene jonoon. Build-jobi (pilvi) ei viittaa yhteenkään secretiin.
+- Gate-jobi tarkistaa secretit ensimmäisessä askeleessaan. Se failaa, jos gate-avain tai pinni puuttuu tai jos sille annetaan `DEPLOY_SSH_KEY` (esim. `secrets: inherit`).
+- `actions/gated-deploy` kieltäytyy GitHub-hostatulta runnerilta (`RUNNER_ENVIRONMENT=github-hosted`).
+- Jos ssh-yhteys katkeaa kesken `deploy`- tai `rollback`-kutsun, action kysyy `status`in kerran lokiin, jotta hostin tila näkyy.
 - Gate-jobi ei checkouttaa repoa.
 
 ### Verbisopimus v1 (asiakkaan näkökulma)
@@ -146,7 +149,7 @@ Vastaus on tasan yksi JSON-rivi, esimerkiksi:
 | 70 | audit-rivin kirjoitus epäonnistui, mitään ei tehty |
 | 255 | ssh itse: yhteys, lähdeosoiterajaus tai avain (gatea ei ajettu) |
 
-`actions/gated-deploy` pitää onnistumisena vain riviä, joka alkaa `{"ok":true`. Vastaus tulostetaan lokiin etuliitteen kanssa, joten se ei voi toimia workflow-komentona.
+`actions/gated-deploy` pitää onnistumisena vain riviä, joka alkaa `{"ok":true`. Muu muoto failaa. Vastaus ja ssh:n stderr tulostetaan `::stop-commands::`-merkkien väliin etuliitteen kanssa, ja `##[` muutetaan muotoon `# #[`. Siksi gaten tuloste ei aja workflow-komentoja.
 
 ### Compose-tiedostot gate-tilassa (K4)
 
@@ -160,8 +163,8 @@ Gate-tila ei synkkaa repon `deploy/`-hakemistoa hostille. Compose-tiedostot omis
 ### Migraatio v2 → v4
 
 1. Vaihda `build-and-deploy.yml@v2` → `@v4`. Ilman muita muutoksia käytös on sama kuin v2:ssa ja v3:ssa (ssh-tila).
-2. Gate-tilaan: lisää `deploy_transport: gate` ja `runner_label: lan-deploy`, ja anna secretit `DEPLOY_GATE_KEY` ja `DEPLOY_GATE_KNOWN_HOSTS`. `DEPLOY_SSH_KEY`tä ei gate-tilassa tarvita.
-3. Jos repo kutsuu `guard-deploy-labels.yml`ää, vaihda sekin `@v4`:ään. Vain v4:n guard tuntee gate-tilan.
+2. Gate-tilaan: lisää `deploy_transport: gate` ja `runner_label: lan-deploy`, ja anna secretit `DEPLOY_GATE_KEY` ja `DEPLOY_GATE_KNOWN_HOSTS` nimettyinä. Älä anna `DEPLOY_SSH_KEY`tä äläkä käytä `secrets: inherit`iä: gate-jobi failaa silloin.
+3. Jos repo kutsuu `guard-deploy-labels.yml`ää, vaihda sekin `@v4`:ään. Vain v4:n guard tuntee gate-tilan. Se tarkistaa gate-jobit kaikista workflow-tiedostoista, ei vain `deploy*`- ja `release*`-tiedostoista.
 4. Tarkista, ettei `deploy/`-hakemistossa ole vientiä odottavia compose-muutoksia (K4).
 
 ## Versiointi

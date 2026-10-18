@@ -29,7 +29,9 @@ key is a forced-command key, so the runner never gets a shell on the host.
   `runner_label` has no effective default in gate mode: empty, `self-hosted`,
   `paperclip`, `docker` or a cloud label fails the build job's first step, so the
   deploy job never queues and the gate key never lands on a shared or cloud
-  runner.
+  runner. The build job references no secrets; the gate job checks its own
+  secrets first and refuses to run if it also receives `DEPLOY_SSH_KEY`.
+  The action itself refuses GitHub-hosted runners.
 - **Host key:** pinned via the `DEPLOY_GATE_KNOWN_HOSTS` secret. No scanning,
   no TOFU; a missing pin fails.
 - **Key handling:** `mktemp -p "$RUNNER_TEMP"` (600), removed in an
@@ -50,8 +52,10 @@ key is a forced-command key, so the runner never gets a shell on the host.
 - `.github/workflows/guard-deploy-labels.yml` — reusable; consumer repos call it
   from `pr-checks` to fail PRs that introduce a cloud label on a host-contacting
   deploy job. The v4 guard fetches the script from the `v4` tag (not `v1`) and
-  also fails gate-mode calls without a literal lan-deploy `runner_label`, and
-  `gated-deploy` jobs whose `runs-on` lacks a lan-deploy label.
+  also fails gate-mode calls (any `deploy_transport` other than the literal
+  `ssh`) without a literal lan-deploy `runner_label`, and `gated-deploy` jobs
+  whose `runs-on` lacks a literal lan-deploy label. Gate checks scan every
+  workflow file; the RK9-37 checks keep the `deploy*`/`release*` scope.
 - `scripts/test_check_deploy_labels.py` — unit tests
   (`python3 -m unittest discover -s scripts`). **Single enforcement owner (RK9-37)** — the cicd templates'
   deploy-stub references this guard, it does not reimplement it.

@@ -160,6 +160,44 @@ class GuardTest(unittest.TestCase):
     def test_gated_action_cloud_violation(self):
         self.assertViolation(gated_action_job("ubuntu-latest"), "gated-deploy")
 
+    def test_gate_transport_expression_counts_as_gate(self):
+        self.assertViolation(reusable_call("${{ 'gate' }}"))
+        self.assertOk(reusable_call("${{ vars.T }}", "lan-deploy"))
+
+    def test_gate_flow_style_with(self):
+        flow = textwrap.dedent("""\
+            jobs:
+              deploy:
+                uses: mv50000/cicd/.github/workflows/build-and-deploy.yml@v4
+                with: {company: demo, deploy_transport: gate, runner_label: self-hosted}
+            """)
+        self.assertViolation(flow)
+
+    def test_gated_action_expression_runs_on_violation(self):
+        self.assertViolation(gated_action_job("${{ false && 'lan-deploy' || 'self-hosted' }}"), "gated-deploy")
+
+    def test_gated_action_in_any_workflow_file(self):
+        for name in ("gate-rollback.yml", "rollback.yaml", "manual.yml"):
+            with self.subTest(name=name):
+                rc, out = self.run_guard(gated_action_job("[self-hosted, paperclip]"), name=name)
+                self.assertEqual(rc, 1, out)
+                rc, out = self.run_guard(gated_action_job("[self-hosted, lan-deploy]"), name=name)
+                self.assertEqual(rc, 0, out)
+
+    def test_non_deploy_file_keeps_rk9_37_scope(self):
+        rc, out = self.run_guard(textwrap.dedent("""\
+            jobs:
+              ops:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: ssh deploy@host true
+            """), name="ops.yml")
+        self.assertEqual(rc, 0, out)
+
+    def test_deploy_yaml_extension(self):
+        rc, out = self.run_guard(reusable_call("gate", "self-hosted"), name="deploy-dev.yaml")
+        self.assertEqual(rc, 1, out)
+
     def test_no_workflows(self):
         with tempfile.TemporaryDirectory() as repo:
             out = io.StringIO()

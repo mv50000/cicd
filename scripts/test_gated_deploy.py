@@ -30,6 +30,7 @@ req="${@: -1}"
 case "$STUB_MODE:$req" in
   ok:deploy*)   echo '{"ok":true,"verb":"deploy","tag":"sha-abcdef1","changed":true,"health":"ok"}' ;;
   same:deploy*) echo '{"ok":true,"verb":"deploy","tag":"sha-abcdef1","changed":false,"health":"ok"}' ;;
+  drop:deploy*) echo 'Connection reset' >&2; exit 255 ;;
   fail:deploy*) echo '{"ok":false,"verb":"deploy","error":"health_failed","tag":"sha-abcdef1","restored":"ok"}'; exit 1 ;;
   *:health)
     n=$(cat "$STUB_DIR/hc" 2>/dev/null || echo 0); echo $((n+1)) > "$STUB_DIR/hc"
@@ -37,7 +38,7 @@ case "$STUB_MODE:$req" in
     if [ "$STUB_MODE" = unreachable ]; then echo 'ssh: connect to host: Connection refused' >&2; exit 255; fi
     if [ "$STUB_MODE" = unhealthy ] || [ "$n" -lt 1 ]; then echo '{"ok":false,"verb":"health","error":"health_failed"}'; exit 1; fi
     echo '{"ok":true,"verb":"health","health":"ok"}' ;;
-  inject:status) echo '::warning::x {"ok":true,"verb":"status"}' ;;
+  inject:status) echo '::warning::x {"ok":true,"verb":"status"} ##[add-mask]y'; echo '##[warning]from stderr' >&2 ;;
   *:status)     echo '{"ok":true,"verb":"status","image_tag":"sha-abcdef1"}' ;;
   *) echo '{"ok":false,"error":"rejected","reason":"verb_not_allowed"}'; exit 2 ;;
 esac
@@ -72,7 +73,7 @@ class GatedDeployTest(unittest.TestCase):
                 texts.append(fh.read())
         return texts
 
-    def run_action(self, mode="ok", **overrides):
+    def run_action(self, mode="ok", extra_env=None, **overrides):
         inputs = {
             "verb": "deploy", "image_tag": "sha-abcdef1", "gate_host": "gate.example",
             "gate_user": "deploy", "gate_port": "22", "ssh_key": KEY,
@@ -86,6 +87,7 @@ class GatedDeployTest(unittest.TestCase):
                 continue
             env = dict(os.environ, RUNNER_TEMP=self.runner_temp, STUB_DIR=self.dir, STUB_MODE=mode,
                        PATH=os.path.join(self.dir, "bin") + os.pathsep + os.environ["PATH"])
+            env.update(extra_env or {})
             for key, val in step.get("env", {}).items():
                 val = str(val)
                 if val.startswith("${{ inputs."):
@@ -149,6 +151,7 @@ class GatedDeployTest(unittest.TestCase):
             {"verb": "seed-e2e"},
             {"verb": "deploy sha-abcdef1"},
             {"gate_host": "host;id"},
+            {"gate_host": "-Jevil.example"},
             {"gate_user": "root -o ProxyCommand=x"},
         ]
         for case in cases:
@@ -156,6 +159,18 @@ class GatedDeployTest(unittest.TestCase):
                 failed, _, argv, _, _ = self.run_action(**case)
                 self.assertTrue(failed)
                 self.assertEqual(argv, [])
+
+    def test_refuses_github_hosted_runner(self):
+        failed, _, argv, _, _ = self.run_action(extra_env={"RUNNER_ENVIRONMENT": "github-hosted"})
+        self.assertTrue(failed)
+        self.assertEqual(argv, [])
+
+    def test_ssh_drop_during_deploy_logs_status(self):
+        failed, out, argv, _, log = self.run_action(mode="drop")
+        self.assertTrue(failed)
+        self.assertEqual(out["exit_code"], "255")
+        self.assertEqual([a[-1] for a in argv], ["deploy sha-abcdef1", "status"])
+        self.assertIn("Querying gate status", log)
 
     def test_health_polls_until_ok(self):
         failed, out, argv, stdin, _ = self.run_action(verb="health")
@@ -190,6 +205,12 @@ class GatedDeployTest(unittest.TestCase):
         self.assertTrue(failed)
         self.assertEqual(out["ok"], "false")
         self.assertNotIn("\n::warning::x", "\n" + log)
+        self.assertNotIn("##[", log)
+        lines = log.splitlines()
+        stop = [l for l in lines if l.startswith("::stop-commands::")]
+        self.assertEqual(len(stop), 1)
+        token = stop[0].split("::")[2]
+        self.assertIn(f"::{token}::", lines)
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")

@@ -96,7 +96,7 @@ runs:
             [[ "$_REGISTRY_TOKEN" =~ ^[A-Za-z0-9_.-]{1,8000}$ ]] || fail "registry_token has an unexpected format"
           fi
         fi
-        [[ "$GATE_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || fail "gate_host must be a plain host name or IPv4 address"
+        [[ "$GATE_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail "gate_host must be a plain host name or IPv4 address"
         [[ "$GATE_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "gate_user is not a valid user name"
         [[ "$GATE_PORT" =~ ^[0-9]{1,5}$ ]] || fail "gate_port must be numeric"
         [[ "$HEALTH_TIMEOUT" =~ ^[0-9]{1,4}$ ]] || fail "health_timeout_s must be numeric"
@@ -106,6 +106,7 @@ runs:
           | grep -Eq '^[^#[:space:]]+[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)[[:space:]]+[A-Za-z0-9+/]+=*([[:space:]]|$)' \
           || fail "known_hosts has no pinned host key line; the gate host key must be pinned (no host key scanning, no TOFU)"
         [ -n "${RUNNER_TEMP:-}" ] && [ -d "$RUNNER_TEMP" ] || fail "RUNNER_TEMP is not set"
+        [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] || fail "refusing to put the gate key on a GitHub-hosted runner"
 
         umask 077
         KEY_FILE=$(mktemp -p "$RUNNER_TEMP" gated-deploy-key.XXXXXXXX)
@@ -147,23 +148,27 @@ runs:
           -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
           -p "$GATE_PORT" -l "$GATE_USER" "$GATE_HOST")
 
-        # Prints the response with a prefix so a crafted value can never be
-        # read as a workflow command.
+        # Gate output is printed between stop-commands markers, with a prefix
+        # and with the legacy "##[" form defused, so it can never run as a
+        # workflow command.
+        STOP=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
         call_gate() {
           local request=$1
           if [ "$VERB" = deploy ] && [ -n "$_REGISTRY_TOKEN" ]; then
-            # The token reaches the remote side only as ssh stdin (printf is a
-            # builtin, so it is not on any process command line either).
-            RESP=$(printf '%s\n' "$_REGISTRY_TOKEN" | "${SSH[@]}" "$request" 2>"$ERR_FILE")
+            # The token reaches the remote side only as ssh stdin (a here-string,
+            # so it is on no process command line).
+            RESP=$("${SSH[@]}" "$request" <<<"$_REGISTRY_TOKEN" 2>"$ERR_FILE")
           else
             RESP=$("${SSH[@]}" "$request" </dev/null 2>"$ERR_FILE")
           fi
           RC=$?
           RESP=$(printf '%s\n' "$RESP" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 1)
-          echo "gate response (exit $RC): $RESP"
+          echo "::stop-commands::$STOP"
+          echo "gate response (exit $RC): ${RESP//'##['/'# #['}"
           if [ -s "$ERR_FILE" ]; then
-            sed 's/^/ssh stderr: /' "$ERR_FILE" | head -n 20
+            sed -e 's/##\[/# #[/g' -e 's/^/ssh stderr: /' "$ERR_FILE" | head -n 20
           fi
+          echo "::$STOP::"
         }
 
         # Success only when the line itself starts with {"ok":true (fail closed).
@@ -191,7 +196,14 @@ runs:
               1)   echo "::error::gate $VERB failed (see response). The gate restores the previous state itself; do not call rollback after a failed deploy." ;;
               2)   echo "::error::gate rejected the request before acting (see reason)" ;;
               70)  echo "::error::gate could not write its audit line; nothing was done" ;;
-              255) echo "::error::ssh failed (connection, source restriction, key or host key pin)" ;;
+              255) echo "::error::ssh failed (connection, source restriction, key or host key pin)"
+                   if [ "$VERB" = deploy ] || [ "$VERB" = rollback ]; then
+                     # The request may have reached the gate before the drop: log the state.
+                     echo "Querying gate status once to show the state on the host:"
+                     SAVED_RC=$RC; SAVED_RESP=$RESP
+                     call_gate status
+                     RC=$SAVED_RC; RESP=$SAVED_RESP
+                   fi ;;
               *)   echo "::error::gate $VERB returned exit $RC" ;;
             esac
             if [[ "$RESP" == *'"restored":"failed"'* ]]; then

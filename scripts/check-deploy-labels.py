@@ -16,7 +16,10 @@ GATE MODE (v4, RK9-545): a call of the build-and-deploy reusable with
 must name a lan-deploy runner (`lan-deploy` or `lan-deploy-<suffix>`). A missing
 runner_label (the reusable's default self-hosted), self-hosted, paperclip,
 docker, a cloud label or a non-literal expression is a violation: the gate key
-must never land on a shared or cloud runner.
+must never land on a shared or cloud runner. A deploy_transport that is not the
+literal `ssh` counts as gate. Gate checks cover every workflow file (a manual
+gate rollback workflow need not be called deploy*); the RK9-37 checks keep
+their deploy*/release* scope.
 
 Usage: check-deploy-labels.py [<repo_dir>]   (default: cwd)
 Exit 0 = clean, 1 = violation(s) found, 2 = usage error.
@@ -32,7 +35,7 @@ HOST_CONTACT = re.compile(
 # cicd reusable deploy whose runner is controlled by runner_label input
 REUSABLE = re.compile(r'uses:\s*\S*cicd/\.github/workflows/build-and-deploy\.yml')
 GATED_ACTION = re.compile(r'uses:\s*\S*cicd/actions/gated-deploy@')
-GATE_TRANSPORT = re.compile(r'^\s*deploy_transport:\s*([\'"]?)gate\1\s*(#.*)?$', re.M)
+DEPLOY_TRANSPORT = re.compile(r'deploy_transport\s*:\s*([^,}\n#]*)')
 LAN_DEPLOY = re.compile(r'^lan-deploy(-[a-z0-9]+)*$')
 
 def parse_jobs(text):
@@ -82,6 +85,13 @@ def job_runs_on_labels(body):
         return labels
     return []
 
+def is_gate_call(bodytext):
+    """True unless every deploy_transport value is the literal ssh."""
+    for m in DEPLOY_TRANSPORT.finditer(bodytext):
+        if m.group(1).strip().strip('\'"') != 'ssh':
+            return True
+    return False
+
 def runner_label_raw(body):
     """Literal runner_label value, '' for a non-literal expression, None if absent."""
     for l in body:
@@ -100,8 +110,16 @@ def runner_label_input(body):
 def main():
     repo = sys.argv[1] if len(sys.argv) > 1 else '.'
     wfdir = os.path.join(repo, '.github', 'workflows')
-    files = sorted(glob.glob(os.path.join(wfdir, 'deploy*.yml')) +
-                   glob.glob(os.path.join(wfdir, 'release*.yml')))
+    deploy_files = set()
+    for pat in ('deploy*.yml', 'deploy*.yaml', 'release*.yml', 'release*.yaml'):
+        deploy_files.update(glob.glob(os.path.join(wfdir, pat)))
+    gate_files = set()
+    for f in glob.glob(os.path.join(wfdir, '*.yml')) + glob.glob(os.path.join(wfdir, '*.yaml')):
+        with open(f) as fh:
+            text = fh.read()
+        if GATED_ACTION.search(text) or DEPLOY_TRANSPORT.search(text):
+            gate_files.add(f)
+    files = sorted(deploy_files | gate_files)
     if not files:
         print(f"[check-deploy-labels] no deploy/release workflows in {wfdir} — nothing to check")
         return 0
@@ -116,14 +134,17 @@ def main():
             contacts = bool(HOST_CONTACT.search(bodytext)) or is_reusable
             if not contacts:
                 continue  # pure build/test job — cloud runner OK
-            if is_reusable and GATE_TRANSPORT.search(bodytext):
+            if f not in deploy_files and not (GATED_ACTION.search(bodytext) or (is_reusable and is_gate_call(bodytext))):
+                continue  # outside deploy*/release* only gate jobs are checked
+            if is_reusable and is_gate_call(bodytext):
                 rl = runner_label_raw(body)
                 if not rl or not LAN_DEPLOY.match(rl):
                     shown = 'missing (default self-hosted)' if rl is None else (f"'{rl}'" if rl else 'a non-literal expression')
                     violations.append(f"{f}::{name} calls cicd deploy reusable with deploy_transport: gate but runner_label is {shown} (must be a lan-deploy label)")
             elif GATED_ACTION.search(bodytext):
                 labels = job_runs_on_labels(body)
-                if not any(LAN_DEPLOY.match(x) for x in labels) or any(CLOUD.search(x) for x in labels):
+                if ('${{' in (ro or '') or not any(LAN_DEPLOY.match(x) for x in labels)
+                        or any(CLOUD.search(x) for x in labels)):
                     violations.append(f"{f}::{name} uses actions/gated-deploy on runner '{ro}' (must include a lan-deploy label)")
             elif is_reusable:
                 rl = runner_label_input(body)
