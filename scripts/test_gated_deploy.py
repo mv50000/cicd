@@ -87,6 +87,8 @@ class GatedDeployTest(unittest.TestCase):
                 continue
             env = dict(os.environ, RUNNER_TEMP=self.runner_temp, STUB_DIR=self.dir, STUB_MODE=mode,
                        PATH=os.path.join(self.dir, "bin") + os.pathsep + os.environ["PATH"])
+            # Tests run on GitHub-hosted CI too; the action refuses that value.
+            env["RUNNER_ENVIRONMENT"] = "self-hosted"
             env.update(extra_env or {})
             for key, val in step.get("env", {}).items():
                 val = str(val)
