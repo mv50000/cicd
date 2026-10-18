@@ -11,6 +11,13 @@ cloud runner (e.g. quantimodo deploy-dev builds the image on blacksmith-4vcpu,
 then a separate self-hosted job SSHes to the host). Only host-contacting jobs are
 constrained. This guard flags cloud runners only on jobs that contact a host.
 
+GATE MODE (v4, RK9-545): a call of the build-and-deploy reusable with
+`deploy_transport: gate`, or a job that uses actions/gated-deploy directly,
+must name a lan-deploy runner (`lan-deploy` or `lan-deploy-<suffix>`). A missing
+runner_label (the reusable's default self-hosted), self-hosted, paperclip,
+docker, a cloud label or a non-literal expression is a violation: the gate key
+must never land on a shared or cloud runner.
+
 Usage: check-deploy-labels.py [<repo_dir>]   (default: cwd)
 Exit 0 = clean, 1 = violation(s) found, 2 = usage error.
 """
@@ -20,10 +27,13 @@ CLOUD = re.compile(r'blacksmith-|ubuntu-|macos-|windows-')
 # Markers that mean "this job talks to a deploy host"
 HOST_CONTACT = re.compile(
     r'\bssh\b|\bscp\b|\brsync\b|deploy_host|DEPLOY_HOST|E2E_BASE_URL|'
-    r'ssh-deploy|wait-for-health|docker\s+compose\s+(pull|up)|knownhosts|ssh-keyscan',
+    r'ssh-deploy|gated-deploy|wait-for-health|docker\s+compose\s+(pull|up)|knownhosts|ssh-keyscan',
     re.I)
 # cicd reusable deploy whose runner is controlled by runner_label input
 REUSABLE = re.compile(r'uses:\s*\S*cicd/\.github/workflows/build-and-deploy\.yml')
+GATED_ACTION = re.compile(r'uses:\s*\S*cicd/actions/gated-deploy@')
+GATE_TRANSPORT = re.compile(r'^\s*deploy_transport:\s*([\'"]?)gate\1\s*(#.*)?$', re.M)
+LAN_DEPLOY = re.compile(r'^lan-deploy(-[a-z0-9]+)*$')
 
 def parse_jobs(text):
     """Yield (job_name, job_body_lines) for each job under top-level jobs:."""
@@ -56,6 +66,31 @@ def job_runs_on(body):
     # reusable-call jobs have no runs-on; check runner_label input
     return None
 
+def job_runs_on_labels(body):
+    """Labels of runs-on, inline ([a, b] / "x") or as a block list (- a)."""
+    for idx, l in enumerate(body):
+        m = re.match(r'^(\s*)runs-on:\s*(.*)$', l)
+        if not m: continue
+        val = m.group(2).split('#')[0].strip()
+        if val:
+            return [t for t in re.split(r'[\s,\[\]\'"]+', val) if t]
+        labels = []
+        for nxt in body[idx + 1:]:
+            lm = re.match(r'^\s*-\s*([\'"]?)([^\'"#\s]+)\1', nxt)
+            if not lm: break
+            labels.append(lm.group(2))
+        return labels
+    return []
+
+def runner_label_raw(body):
+    """Literal runner_label value, '' for a non-literal expression, None if absent."""
+    for l in body:
+        m = re.match(r'^\s*runner_label:\s*(.*?)\s*(#.*)?$', l)
+        if m:
+            val = m.group(1).strip().strip('\'"')
+            return val if re.fullmatch(r'[A-Za-z0-9_.-]+', val) else ''
+    return None
+
 def runner_label_input(body):
     for l in body:
         m = re.search(r'runner_label:\s*([\'"]?)([A-Za-z0-9_-]+)\1', l)
@@ -72,7 +107,8 @@ def main():
         return 0
     violations = []
     for f in files:
-        text = open(f).read()
+        with open(f) as fh:
+            text = fh.read()
         for name, body in parse_jobs(text):
             bodytext = '\n'.join(body)
             ro = job_runs_on(body)
@@ -80,7 +116,16 @@ def main():
             contacts = bool(HOST_CONTACT.search(bodytext)) or is_reusable
             if not contacts:
                 continue  # pure build/test job — cloud runner OK
-            if is_reusable:
+            if is_reusable and GATE_TRANSPORT.search(bodytext):
+                rl = runner_label_raw(body)
+                if not rl or not LAN_DEPLOY.match(rl):
+                    shown = 'missing (default self-hosted)' if rl is None else (f"'{rl}'" if rl else 'a non-literal expression')
+                    violations.append(f"{f}::{name} calls cicd deploy reusable with deploy_transport: gate but runner_label is {shown} (must be a lan-deploy label)")
+            elif GATED_ACTION.search(bodytext):
+                labels = job_runs_on_labels(body)
+                if not any(LAN_DEPLOY.match(x) for x in labels) or any(CLOUD.search(x) for x in labels):
+                    violations.append(f"{f}::{name} uses actions/gated-deploy on runner '{ro}' (must include a lan-deploy label)")
+            elif is_reusable:
                 rl = runner_label_input(body)
                 if rl and CLOUD.search(rl):
                     violations.append(f"{f}::{name} calls cicd deploy reusable with cloud runner_label '{rl}'")
@@ -88,7 +133,7 @@ def main():
             elif ro and CLOUD.search(ro):
                 violations.append(f"{f}::{name} host-contacting job on cloud runner '{ro}' (must be self-hosted — dev-proxy 403s cloud IPs)")
     if violations:
-        print("DEPLOY-RUNNER GUARD: violation(s) found — deploy jobs that contact a host must be self-hosted:")
+        print("DEPLOY-RUNNER GUARD: violation(s) found — deploy jobs that contact a host must be self-hosted (gate mode: lan-deploy):")
         for v in violations: print(f"  ✗ {v}")
         return 1
     print(f"[check-deploy-labels] OK — {len(files)} deploy workflow(s), all host-contacting jobs self-hosted")

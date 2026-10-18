@@ -5,7 +5,10 @@
 # Usage in a consumer repo's pr-checks.yml:
 #   jobs:
 #     deploy-guard:
-#       uses: mv50000/cicd/.github/workflows/guard-deploy-labels.yml@v1
+#       uses: mv50000/cicd/.github/workflows/guard-deploy-labels.yml@v4
+#
+# The script is fetched from the same frozen tag as this workflow (v4), so the
+# v4 gate-mode checks reach every v4 caller. Older tags keep their own copy.
 name: Guard deploy runner labels
 
 on:
@@ -21,6 +24,6 @@ jobs:
       - name: Fetch guard script from cicd
         run: |
           curl -fsSL -o /tmp/check-deploy-labels.py \
-            https://raw.githubusercontent.com/mv50000/cicd/v1/scripts/check-deploy-labels.py
+            https://raw.githubusercontent.com/mv50000/cicd/refs/tags/v4/scripts/check-deploy-labels.py
       - name: Check deploy workflow runner labels
         run: python3 /tmp/check-deploy-labels.py "$GITHUB_WORKSPACE"

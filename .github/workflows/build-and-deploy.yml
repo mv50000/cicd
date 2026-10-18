@@ -7,6 +7,16 @@ name: Build and Deploy
 #
 #   build  -> build_runner  (Blacksmith, cloud)        : docker build + push to GHCR
 #   deploy -> runner_label  (self-hosted, LAN-reach)   : compose pull + up + health
+#
+# deploy_transport (v4):
+#   ssh  (default) : the deploy job is the same as in v3 (sync deploy/ + ssh).
+#   gate           : the deploy_gate job sends only deploy-gate verbs
+#                    (deploy <tag>, health, rollback) via actions/gated-deploy.
+#                    No file sync, no remote shell. runner_label has no default in
+#                    this mode: it must name a lan-deploy runner.
+#
+# Internal action references are pinned to @v4 so that v4 never changes when
+# an older tag moves. v1, v2 and v3 are frozen.
 
 on:
   workflow_call:
@@ -78,10 +88,28 @@ on:
         description: >-
           Self-hosted runner for the DEPLOY job ONLY. Must be able to reach
           deploy_host over SSH on the LAN. The build runs on build_runner
-          (Blacksmith), not here.
+          (Blacksmith), not here. ssh mode: self-hosted maps to
+          [self-hosted, paperclip]. gate mode: no effective default; must be a
+          lan-deploy label (lan-deploy or lan-deploy-<suffix>), used as
+          [self-hosted, <label>].
+      deploy_transport:
+        type: string
+        required: false
+        default: ssh
+        description: >-
+          ssh (default, v3 behaviour) | gate (deploy-gate verbs only; needs the
+          DEPLOY_GATE_KEY and DEPLOY_GATE_KNOWN_HOSTS secrets).
     secrets:
       DEPLOY_SSH_KEY:
-        required: true
+        # Required in ssh mode (checked in the build job). Optional in the
+        # schema only so that gate-mode callers do not need a full-shell key.
+        required: false
+      DEPLOY_GATE_KEY:
+        required: false
+        description: "gate mode: private key of the forced-command gate key"
+      DEPLOY_GATE_KNOWN_HOSTS:
+        required: false
+        description: "gate mode: pinned known_hosts line(s) for deploy_host"
       SLACK_WEBHOOK_URL:
         required: false
     outputs:
@@ -89,8 +117,8 @@ on:
         description: "Pushed image tag (sha-XXXXXXX)"
         value: ${{ jobs.build.outputs.image_tag }}
       health_status:
-        description: "ok | degraded | failed"
-        value: ${{ jobs.deploy.outputs.health_status }}
+        description: "ok | degraded | failed (gate mode also: error)"
+        value: ${{ jobs.deploy.outputs.health_status || jobs.deploy_gate.outputs.health_status }}
 
 permissions:
   contents: read
@@ -108,15 +136,49 @@ jobs:
       image_tag: ${{ steps.build.outputs.image_tag }}
       full_image: ${{ steps.build.outputs.full_image }}
     steps:
+      # Runs before anything else so a bad gate configuration fails here and
+      # the deploy job is never queued. Only booleans about the secrets reach
+      # this (cloud) runner, never their values.
+      - name: Validate deploy inputs
+        env:
+          TRANSPORT: ${{ inputs.deploy_transport }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          HAS_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          HAS_GATE_KEY: ${{ secrets.DEPLOY_GATE_KEY != '' }}
+          HAS_GATE_KNOWN_HOSTS: ${{ secrets.DEPLOY_GATE_KNOWN_HOSTS != '' }}
+        run: |
+          case "$TRANSPORT" in
+            ssh)
+              if [ "$HAS_SSH_KEY" != true ]; then
+                echo "::error::deploy_transport=ssh needs the DEPLOY_SSH_KEY secret"
+                exit 1
+              fi
+              ;;
+            gate)
+              if ! [[ "$RUNNER_LABEL" =~ ^lan-deploy(-[a-z0-9]+)*$ ]]; then
+                echo "::error::deploy_transport=gate needs runner_label set to a lan-deploy runner label (got '${RUNNER_LABEL}'). Empty, self-hosted, paperclip, docker and cloud labels are refused so the gate key never lands on a shared or cloud runner."
+                exit 1
+              fi
+              if [ "$HAS_GATE_KEY" != true ] || [ "$HAS_GATE_KNOWN_HOSTS" != true ]; then
+                echo "::error::deploy_transport=gate needs the DEPLOY_GATE_KEY and DEPLOY_GATE_KNOWN_HOSTS secrets (host key is pinned, no host key scanning)"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::deploy_transport must be ssh or gate (got '${TRANSPORT}')"
+              exit 1
+              ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up toolchain
-        uses: mv50000/cicd/actions/setup-toolchain@v1
+        uses: mv50000/cicd/actions/setup-toolchain@v4
 
       - name: Build and push Docker image
         id: build
-        uses: mv50000/cicd/actions/docker-build-push@v1
+        uses: mv50000/cicd/actions/docker-build-push@v4
         with:
           image_name: ${{ inputs.image_name }}
           dockerfile: ${{ inputs.dockerfile }}
@@ -128,6 +190,7 @@ jobs:
   deploy:
     name: deploy ${{ inputs.company }}/${{ inputs.environment }}
     needs: build
+    if: inputs.deploy_transport == 'ssh'
     runs-on: ${{ inputs.runner_label == 'self-hosted' && fromJSON('["self-hosted","paperclip"]') || fromJSON(format('["{0}"]', inputs.runner_label)) }}
     timeout-minutes: 15
     concurrency:
@@ -141,7 +204,7 @@ jobs:
 
       - name: SSH deploy to ${{ inputs.deploy_host }}
         id: deploy
-        uses: mv50000/cicd/actions/ssh-deploy@v1
+        uses: mv50000/cicd/actions/ssh-deploy@v4
         with:
           deploy_host: ${{ inputs.deploy_host }}
           deploy_user: ${{ inputs.deploy_user }}
@@ -154,7 +217,7 @@ jobs:
 
       - name: Wait for health
         id: health
-        uses: mv50000/cicd/actions/wait-for-health@v1
+        uses: mv50000/cicd/actions/wait-for-health@v4
         with:
           health_url: ${{ inputs.health_url }}
           timeout_s: ${{ inputs.health_timeout_s }}
@@ -164,7 +227,7 @@ jobs:
 
       - name: Auto-rollback on health failure
         if: steps.health.outputs.status == 'failed'
-        uses: mv50000/cicd/actions/ssh-deploy@v1
+        uses: mv50000/cicd/actions/ssh-deploy@v4
         with:
           deploy_host: ${{ inputs.deploy_host }}
           deploy_user: ${{ inputs.deploy_user }}
@@ -180,7 +243,7 @@ jobs:
         if: always() && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        uses: mv50000/cicd/actions/slack-notify@v1
+        uses: mv50000/cicd/actions/slack-notify@v4
         with:
           company: ${{ inputs.company }}
           environment: ${{ inputs.environment }}
@@ -192,4 +255,85 @@ jobs:
         if: steps.health.outputs.status == 'failed'
         run: |
           echo "::error::Health check failed; rollback attempted"
+          exit 1
+
+  # gate mode. Talks to the server-side deploy-gate (verb contract v1) only:
+  # one verb per ssh call, no file sync, no remote shell. Compose files are owned
+  # by the host (see README, K4).
+  deploy_gate:
+    name: deploy ${{ inputs.company }}/${{ inputs.environment }} (gate)
+    needs: build
+    if: inputs.deploy_transport == 'gate'
+    runs-on: ${{ fromJSON(format('["self-hosted","{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 20
+    # The GITHUB_TOKEN sent to the host as the registry pull token is read-only.
+    permissions:
+      packages: read
+    concurrency:
+      group: deploy-${{ inputs.company }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      health_status: ${{ steps.health.outputs.status }}
+    steps:
+      # A failed deploy is restored by the gate itself (restored field in the
+      # response). The client must NOT call rollback after it: that would go
+      # to previous-tag, two versions back.
+      - name: Gate deploy ${{ needs.build.outputs.image_tag }}
+        id: deploy
+        uses: mv50000/cicd/actions/gated-deploy@v4
+        with:
+          verb: deploy
+          image_tag: ${{ needs.build.outputs.image_tag }}
+          gate_host: ${{ inputs.deploy_host }}
+          gate_user: ${{ inputs.deploy_user }}
+          ssh_key: ${{ secrets.DEPLOY_GATE_KEY }}
+          known_hosts: ${{ secrets.DEPLOY_GATE_KNOWN_HOSTS }}
+          registry_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for health (gate health verb)
+        id: health
+        uses: mv50000/cicd/actions/gated-deploy@v4
+        with:
+          verb: health
+          gate_host: ${{ inputs.deploy_host }}
+          gate_user: ${{ inputs.deploy_user }}
+          ssh_key: ${{ secrets.DEPLOY_GATE_KEY }}
+          known_hosts: ${{ secrets.DEPLOY_GATE_KNOWN_HOSTS }}
+          health_timeout_s: ${{ inputs.health_timeout_s }}
+
+      # Only when this run actually switched the tag (changed=true): then
+      # previous-tag is the version that ran before this deploy.
+      - name: Rollback on health failure (gate rollback verb)
+        if: steps.health.outputs.status == 'failed' && steps.deploy.outputs.changed == 'true'
+        uses: mv50000/cicd/actions/gated-deploy@v4
+        with:
+          verb: rollback
+          gate_host: ${{ inputs.deploy_host }}
+          gate_user: ${{ inputs.deploy_user }}
+          ssh_key: ${{ secrets.DEPLOY_GATE_KEY }}
+          known_hosts: ${{ secrets.DEPLOY_GATE_KNOWN_HOSTS }}
+
+      - name: Notify Slack
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        uses: mv50000/cicd/actions/slack-notify@v4
+        with:
+          company: ${{ inputs.company }}
+          environment: ${{ inputs.environment }}
+          status: ${{ job.status }}
+          image_tag: ${{ needs.build.outputs.image_tag }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Fail job if health failed
+        if: steps.health.outputs.status == 'failed' || steps.health.outputs.status == 'error'
+        env:
+          HEALTH_STATUS: ${{ steps.health.outputs.status }}
+          CHANGED: ${{ steps.deploy.outputs.changed }}
+        run: |
+          if [ "$HEALTH_STATUS" = failed ] && [ "$CHANGED" = true ]; then
+            echo "::error::Health check failed; gate rollback attempted"
+          else
+            echo "::error::Health check ${HEALTH_STATUS}; no rollback (deploy did not switch the tag, or health could not be read)"
+          fi
           exit 1

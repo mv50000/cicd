@@ -1,0 +1,24 @@
+name: Self-test
+
+# Tests for this repo itself: the deploy-label guard and the gated-deploy
+# action (run against a stub ssh). Static checks only, no host contact, so a
+# GitHub-hosted runner is fine here.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    name: unittest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; }
+      - name: Run tests
+        run: python3 -m unittest discover -s scripts -v
