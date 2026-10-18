@@ -114,9 +114,9 @@ Epäonnistunut `deploy` ei käynnistä rollbackia. Gate palauttaa vanhan tilan i
 - Host key pinnataan secretillä `DEPLOY_GATE_KNOWN_HOSTS` (known_hosts-rivi). Skannausta ei ole, ja puuttuva pinni failaa.
 - Avain ja known_hosts kirjoitetaan `mktemp -p "$RUNNER_TEMP"` -tiedostoihin (600). `if: always()` -askel poistaa ne, ja viimeinen askel failaa, jos avaintiedosto on yhä olemassa.
 - ssh ajetaan `-F /dev/null`-asetuksella: käyttäjän tai järjestelmän ssh_config ei vaikuta kutsuun.
-- `runner_label`illa ei ole gate-tilassa oletusta. Arvon on oltava `lan-deploy` tai `lan-deploy-<pääte>`. Tyhjä, `self-hosted`, `paperclip`, `docker` tai pilvilabel failaa build-jobin ensimmäisessä askeleessa, joten deploy-jobi ei mene jonoon. Build-jobi (pilvi) ei viittaa yhteenkään secretiin.
-- Gate-jobi tarkistaa secretit ensimmäisessä askeleessaan. Se failaa, jos gate-avain tai pinni puuttuu tai jos sille annetaan `DEPLOY_SSH_KEY` (esim. `secrets: inherit`).
-- `actions/gated-deploy` kieltäytyy GitHub-hostatulta runnerilta (`RUNNER_ENVIRONMENT=github-hosted`).
+- `runner_label`illa ei ole gate-tilassa oletusta. Arvon on oltava `lan-deploy` tai `lan-deploy-<pääte>`. Tyhjä, `self-hosted`, `paperclip`, `docker` tai pilvilabel failaa build-jobin ensimmäisessä askeleessa, joten deploy-jobi ei mene jonoon. Build-jobi (pilvi) ei viittaa deploy-secreteihin. Sillä on vain automaattinen `GITHUB_TOKEN` imagen pushiin.
+- Gate-jobi tarkistaa secretit ensimmäisessä askeleessaan. Se failaa, jos gate-avain tai pinni puuttuu tai jos sille annetaan `DEPLOY_SSH_KEY` (esim. `secrets: inherit`). Tarkistus estää avaimen käytön, mutta ei sitä, että runner on jo saanut sen. Siksi kutsuja nimeää secretit itse.
+- `actions/gated-deploy` kieltäytyy GitHub-hostatulta runnerilta (`RUNNER_ENVIRONMENT=github-hosted`). Tarkistus on vain lisäsuoja: muut pilvirunnerit (esim. Blacksmith) rekisteröityvät self-hostediksi. Varsinainen kontrolli on `runs-on`/`runner_label` ja guard.
 - Jos ssh-yhteys katkeaa kesken `deploy`- tai `rollback`-kutsun, action kysyy `status`in kerran lokiin, jotta hostin tila näkyy.
 - Gate-jobi ei checkouttaa repoa.
 

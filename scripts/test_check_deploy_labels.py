@@ -198,6 +198,26 @@ class GuardTest(unittest.TestCase):
         rc, out = self.run_guard(reusable_call("gate", "self-hosted"), name="deploy-dev.yaml")
         self.assertEqual(rc, 1, out)
 
+    def test_odd_layouts_do_not_bypass(self):
+        cases = {
+            "4-space indent": "jobs:\n    rb:\n        runs-on: [self-hosted, paperclip]\n        steps:\n            - uses: mv50000/cicd/actions/gated-deploy@v4\n",
+            "comment after jobs": "jobs: # all jobs\n  rb:\n    runs-on: [self-hosted, paperclip]\n    steps:\n      - uses: mv50000/cicd/actions/gated-deploy@v4\n",
+            "quoted job key": 'jobs:\n  "rb":\n    runs-on: [self-hosted, paperclip]\n    steps:\n      - uses: mv50000/cicd/actions/gated-deploy@v4\n',
+            "upper-case owner": "jobs:\n  rb:\n    runs-on: [self-hosted, paperclip]\n    steps:\n      - uses: MV50000/CICD/actions/gated-deploy@v4\n",
+            "unparseable": "jobs: {rb: {runs-on: self-hosted, steps: [{uses: mv50000/cicd/actions/gated-deploy@v4}]}}\n",
+        }
+        for label, wf in cases.items():
+            with self.subTest(label):
+                rc, out = self.run_guard(wf, name="gate-rollback.yml")
+                self.assertEqual(rc, 1, out)
+
+    def test_quoted_transport_key(self):
+        self.assertViolation(reusable_call().replace("      company: demo", '      "deploy_transport": gate'))
+
+    def test_four_space_indent_lan_deploy_ok(self):
+        rc, out = self.run_guard("jobs:\n    rb:\n        runs-on: [self-hosted, lan-deploy]\n        steps:\n            - uses: mv50000/cicd/actions/gated-deploy@v4\n", name="gate-rollback.yml")
+        self.assertEqual(rc, 0, out)
+
     def test_no_workflows(self):
         with tempfile.TemporaryDirectory() as repo:
             out = io.StringIO()

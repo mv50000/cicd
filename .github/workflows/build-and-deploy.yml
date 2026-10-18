@@ -138,8 +138,9 @@ jobs:
       full_image: ${{ steps.build.outputs.full_image }}
     steps:
       # Runs before anything else so a bad gate configuration fails here and
-      # the deploy job is never queued. Inputs only: no secrets are referenced
-      # in this (cloud) job. The gate job checks its secrets itself.
+      # the deploy job is never queued. Inputs only: no deploy secrets are
+      # referenced in this (cloud) job (only GITHUB_TOKEN for the image push).
+      # The gate job checks its secrets itself.
       - name: Validate deploy inputs
         env:
           TRANSPORT: ${{ inputs.deploy_transport }}

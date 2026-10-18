@@ -33,9 +33,9 @@ HOST_CONTACT = re.compile(
     r'ssh-deploy|gated-deploy|wait-for-health|docker\s+compose\s+(pull|up)|knownhosts|ssh-keyscan',
     re.I)
 # cicd reusable deploy whose runner is controlled by runner_label input
-REUSABLE = re.compile(r'uses:\s*\S*cicd/\.github/workflows/build-and-deploy\.yml')
-GATED_ACTION = re.compile(r'uses:\s*\S*cicd/actions/gated-deploy@')
-DEPLOY_TRANSPORT = re.compile(r'deploy_transport\s*:\s*([^,}\n#]*)')
+REUSABLE = re.compile(r'uses:\s*\S*cicd/\.github/workflows/build-and-deploy\.yml', re.I)
+GATED_ACTION = re.compile(r'gated-deploy@', re.I)
+DEPLOY_TRANSPORT = re.compile(r'[\'"]?deploy_transport[\'"]?\s*:\s*([^,}\n#]*)', re.I)
 LAN_DEPLOY = re.compile(r'^lan-deploy(-[a-z0-9]+)*$')
 
 def parse_jobs(text):
@@ -44,15 +44,18 @@ def parse_jobs(text):
     # find 'jobs:' at col 0
     n = len(lines)
     i = 0
-    while i < n and not re.match(r'^jobs:\s*$', lines[i]): i += 1
+    while i < n and not re.match(r'^[\'"]?jobs[\'"]?:\s*(#.*)?$', lines[i]): i += 1
     i += 1
     jobs = []
     cur = None; body = []
+    indent = None  # indentation of job keys, taken from the first one
     while i < n:
         l = lines[i]
         if re.match(r'^\S', l):  # dedent to col 0 -> end of jobs:
             break
-        m = re.match(r'^  ([A-Za-z0-9_-]+):\s*$', l)
+        if indent is None and l.strip() and not l.lstrip().startswith('#'):
+            indent = len(l) - len(l.lstrip(' '))
+        m = re.match(r'^ {%d}[\'"]?([A-Za-z0-9_-]+)[\'"]?:\s*(#.*)?$' % (indent or 2), l)
         if m:
             if cur is not None: jobs.append((cur, body))
             cur = m.group(1); body = []
@@ -127,6 +130,10 @@ def main():
     for f in files:
         with open(f) as fh:
             text = fh.read()
+        # Fail closed: a file that looks like it holds a gate job must yield
+        # a parsed gate job, or it is a violation.
+        file_has_gate = bool(GATED_ACTION.search(text)) or is_gate_call(text)
+        gate_job_seen = False
         for name, body in parse_jobs(text):
             bodytext = '\n'.join(body)
             ro = job_runs_on(body)
@@ -136,6 +143,8 @@ def main():
                 continue  # pure build/test job — cloud runner OK
             if f not in deploy_files and not (GATED_ACTION.search(bodytext) or (is_reusable and is_gate_call(bodytext))):
                 continue  # outside deploy*/release* only gate jobs are checked
+            if GATED_ACTION.search(bodytext) or (is_reusable and is_gate_call(bodytext)):
+                gate_job_seen = True
             if is_reusable and is_gate_call(bodytext):
                 rl = runner_label_raw(body)
                 if not rl or not LAN_DEPLOY.match(rl):
@@ -153,6 +162,8 @@ def main():
                 # self-hosted or default -> ok
             elif ro and CLOUD.search(ro):
                 violations.append(f"{f}::{name} host-contacting job on cloud runner '{ro}' (must be self-hosted — dev-proxy 403s cloud IPs)")
+        if file_has_gate and not gate_job_seen:
+            violations.append(f"{f} mentions gated-deploy or a gate deploy_transport, but no gate job could be parsed (check the jobs: layout)")
     if violations:
         print("DEPLOY-RUNNER GUARD: violation(s) found — deploy jobs that contact a host must be self-hosted (gate mode: lan-deploy):")
         for v in violations: print(f"  ✗ {v}")

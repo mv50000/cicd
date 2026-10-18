@@ -166,10 +166,11 @@ class GatedDeployTest(unittest.TestCase):
         self.assertEqual(argv, [])
 
     def test_ssh_drop_during_deploy_logs_status(self):
-        failed, out, argv, _, log = self.run_action(mode="drop")
+        failed, out, argv, stdin, log = self.run_action(mode="drop")
         self.assertTrue(failed)
         self.assertEqual(out["exit_code"], "255")
         self.assertEqual([a[-1] for a in argv], ["deploy sha-abcdef1", "status"])
+        self.assertEqual(stdin, [TOKEN + "\n", ""])
         self.assertIn("Querying gate status", log)
 
     def test_health_polls_until_ok(self):

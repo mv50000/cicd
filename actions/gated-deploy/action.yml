@@ -106,6 +106,8 @@ runs:
           | grep -Eq '^[^#[:space:]]+[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)[[:space:]]+[A-Za-z0-9+/]+=*([[:space:]]|$)' \
           || fail "known_hosts has no pinned host key line; the gate host key must be pinned (no host key scanning, no TOFU)"
         [ -n "${RUNNER_TEMP:-}" ] && [ -d "$RUNNER_TEMP" ] || fail "RUNNER_TEMP is not set"
+        # Best effort only: other cloud runners register as self-hosted. The
+        # real runner control is the caller's runs-on (lan-deploy) and the guard.
         [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] || fail "refusing to put the gate key on a GitHub-hosted runner"
 
         umask 077
@@ -154,7 +156,7 @@ runs:
         STOP=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
         call_gate() {
           local request=$1
-          if [ "$VERB" = deploy ] && [ -n "$_REGISTRY_TOKEN" ]; then
+          if [[ "$request" == "deploy "* ]] && [ -n "$_REGISTRY_TOKEN" ]; then
             # The token reaches the remote side only as ssh stdin (a here-string,
             # so it is on no process command line).
             RESP=$("${SSH[@]}" "$request" <<<"$_REGISTRY_TOKEN" 2>"$ERR_FILE")
