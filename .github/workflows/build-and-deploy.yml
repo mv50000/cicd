@@ -5,7 +5,7 @@ name: Build and Deploy
 # the LAN. This keeps heavy `docker build` / `cargo build` memory off the
 # Proxmox host (paperclip-01) — see RK9 chronic-overcommit fix.
 #
-#   build  -> build_runner  (Blacksmith, cloud)        : docker build + push to GHCR
+#   build  -> build_runner  (builder pool, self-hosted): docker build + push to GHCR
 #   deploy -> runner_label  (self-hosted, LAN-reach)   : compose pull + up + health
 #
 # deploy_transport (v4):
@@ -76,11 +76,11 @@ on:
       build_runner:
         type: string
         required: false
-        default: blacksmith-4vcpu-ubuntu-2404
+        default: builder
         description: >-
-          Runner for the cloud BUILD job. Builds always run on Blacksmith so they
-          never consume self-hosted host memory. Override for heavier builds, e.g.
-          blacksmith-8vcpu-ubuntu-2404 for Rust.
+          Runner label for the BUILD job. Defaults to the self-hosted builder pool
+          (builder-01/02). Use builder-fast for heavy Rust builds. Blacksmith is
+          reserved for macOS jobs only (RK9-728, 5.11.2026); never GitHub-hosted.
       runner_label:
         type: string
         required: false
