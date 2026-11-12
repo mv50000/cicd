@@ -41,6 +41,22 @@ inputs:
 runs:
   using: composite
   steps:
+    # QUA-1509. Opt-in prod freeze provenance check, same as in
+    # docker-build-push. This action has no environment input, so the target
+    # comes from deploy_path: a last path component "dev" is dev, anything
+    # else is prod (fail closed). Runs before the key is written, so a refused
+    # run never reaches the host. See docs/prod-freeze-provenance.md.
+    - name: Prod freeze provenance (QUA-1509)
+      shell: bash
+      env:
+        PFP_REPOSITORY_ID: ${{ github.repository_id }}
+        PFP_REPOSITORY: ${{ github.repository }}
+        PFP_DEPLOY_PATH: ${{ inputs.deploy_path }}
+        PFP_WORKFLOW_REF: ${{ github.workflow_ref }}
+        PFP_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        PFP_TOKEN: ${{ github.token }}
+      run: bash "${{ github.action_path }}/../../scripts/prod-freeze-provenance.sh"
+
     - name: Configure SSH
       shell: bash
       env:
