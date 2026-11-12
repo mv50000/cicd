@@ -31,6 +31,25 @@ outputs:
 runs:
   using: composite
   steps:
+    # QUA-1509. Opt-in prod freeze provenance check: a no-op for every repo
+    # not listed in scripts/prod-freeze-provenance.sh and for a dev target.
+    # For an opted-in repo it refuses a prod build whose workflow file does
+    # not call the repo's own prod freeze gate, so a stale ref cannot push a
+    # prod image through this action. Images a workflow pushes without it are
+    # not covered. See docs/prod-freeze-provenance.md.
+    - name: Prod freeze provenance (QUA-1509)
+      shell: bash
+      env:
+        PFP_REPOSITORY_ID: ${{ github.repository_id }}
+        PFP_REPOSITORY: ${{ github.repository }}
+        PFP_TARGET: ${{ inputs.environment }}
+        PFP_WORKFLOW_REF: ${{ github.workflow_ref }}
+        PFP_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        PFP_TOKEN: ${{ inputs.github_token || github.token }}
+      # $GITHUB_ACTION_PATH, not the github.action_path expression, which has
+      # been a host path inside container jobs (actions/runner#716).
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/prod-freeze-provenance.sh"
+
     - name: Compute tags
       id: compute
       shell: bash

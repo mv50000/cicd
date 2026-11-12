@@ -34,6 +34,8 @@ Yritysrepo (mv50000/saatavilla)              mv50000/cicd                 paperc
 | `wait-for-health` | Poll `health_url`, timeout, automaattinen tag-pointer-rollback fail-tilassa |
 | `slack-notify` | Slack-webhook (no-op jos `SLACK_WEBHOOK_URL` puuttuu) |
 
+`docker-build-push` ja `ssh-deploy` ajavat ensin opt-in-tarkistuksen prod-jäädytysportin alkuperästä (QUA-1509). Se on no-op kaikille muille repoille kuin listatuille: [docs/prod-freeze-provenance.md](docs/prod-freeze-provenance.md).
+
 ## Käyttö yritysrepossa
 
 `deploy.yml`:
