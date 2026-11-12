@@ -209,7 +209,7 @@ for action in docker-build-push ssh-deploy; do
   first=$(grep -n -m1 -E '^    - name:' "$f" | cut -d: -f1)
   hook=$(grep -n -m1 -E '^    - name: Prod freeze provenance \(QUA-1509\)$' "$f" | cut -d: -f1)
   if [ -n "$first" ] && [ "$first" = "$hook" ] \
-    && grep -qE 'run: bash "\$\{\{ github\.action_path \}\}/\.\./\.\./scripts/prod-freeze-provenance\.sh"$' "$f" \
+    && grep -qE '^      run: bash "\$GITHUB_ACTION_PATH/\.\./\.\./scripts/prod-freeze-provenance\.sh"$' "$f" \
     && grep -qE '^        PFP_WORKFLOW_SHA: \$\{\{ github\.workflow_sha \}\}$' "$f" \
     && grep -qE '^        PFP_WORKFLOW_REF: \$\{\{ github\.workflow_ref \}\}$' "$f" \
     && grep -qE '^        PFP_REPOSITORY_ID: \$\{\{ github\.repository_id \}\}$' "$f" \

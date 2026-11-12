@@ -8,7 +8,10 @@
 # without it: a dispatch on a stale branch, a v* tag pushed to an old sha, or a
 # re-run of a run made before the gate. Those old workflows still call
 # mv50000/cicd/actions/*@v1, and an action tag is resolved when the job starts,
-# so this is the one place an old workflow cannot skip.
+# so a job that goes through docker-build-push or ssh-deploy cannot skip this.
+# It closes only that path: a job that pushes an image or touches the host
+# without these actions (a repo-local deploy action, a direct
+# docker/build-push-action, other workflows) is not covered.
 #
 # What it checks: for an opted-in repo and a prod target, the workflow file of
 # THIS run (github.workflow_ref at github.workflow_sha, read through the

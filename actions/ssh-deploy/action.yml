@@ -55,7 +55,9 @@ runs:
         PFP_WORKFLOW_REF: ${{ github.workflow_ref }}
         PFP_WORKFLOW_SHA: ${{ github.workflow_sha }}
         PFP_TOKEN: ${{ github.token }}
-      run: bash "${{ github.action_path }}/../../scripts/prod-freeze-provenance.sh"
+      # $GITHUB_ACTION_PATH, not the github.action_path expression, which has
+      # been a host path inside container jobs (actions/runner#716).
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/prod-freeze-provenance.sh"
 
     - name: Configure SSH
       shell: bash

@@ -12,7 +12,7 @@
 
 ## Miksi
 
-GitHub ajaa workflow'n siitä refistä, jolta ajo käynnistyy. Quantimodo vei jäädytysportin omiin workflow'ihinsa (QUA-1508, QUA-1510). Mikä tahansa ref, jonka workflow on porttia vanhempi, ajaa silti ilman porttia: vanha haara, vanhaan shahan pushattu v*-tagi tai ennen porttia tehdyn ajon uudelleenajo. Nämä vanhat workflowt kutsuvat `mv50000/cicd/actions/*@v1`-actioneita, ja action-tagi resolvoidaan vasta jobin alkaessa. Siksi tämä on ainoa paikka, jota vanha workflow ei voi ohittaa.
+GitHub ajaa workflow'n siitä refistä, jolta ajo käynnistyy. Quantimodo vei jäädytysportin omiin workflow'ihinsa (QUA-1508, QUA-1510). Mikä tahansa ref, jonka workflow on porttia vanhempi, ajaa silti ilman porttia: vanha haara, vanhaan shahan pushattu v*-tagi tai ennen porttia tehdyn ajon uudelleenajo. Nämä vanhat workflowt kutsuvat `mv50000/cicd/actions/*@v1`-actioneita, ja action-tagi resolvoidaan vasta jobin alkaessa. Siksi jobi, joka kulkee `docker-build-push`- tai `ssh-deploy`-actionin kautta, ei voi ohittaa tarkistusta. Se sulkee vain tämän polun, ei kaikkia vanhan refin reittejä (ks. Rajoitukset).
 
 ## Miksi ei lueta muuttujaa PROD_FREEZE_UNTIL
 
