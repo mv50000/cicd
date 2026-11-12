@@ -51,7 +51,7 @@ Testit: `bash scripts/test-prod-freeze-provenance.sh` (curl on stubattu, ei verk
 
 ## Rajoitukset
 
-- Tarkistus katsoo, että workflow-tiedosto kutsuu porttia. Se ei todista, että portti on kytketty oikein. Kytkennän testaa quantimodon oma `scripts/test_prod_freeze_check.sh`.
-- Uudelleenajo, joka ajaa vain jobin ilman cicd-actionia ennen hostiin koskemista, ohittaa tarkistuksen. Quantimodossa tällainen on porttia vanhempi `deploy`-job (`238d1569`–`62e1a853`), joka käyttää repon omaa `app-deploy`-actionia. Sen voi uudelleenajaa 30 päivän ajan alkuperäisestä ajosta.
+- Tarkistus katsoo, että workflow-tiedosto kutsuu porttia. Se ei todista, että portti on kytketty oikein. Sen testaa kutsuvan repon oma testisuite.
+- Se kattaa vain jobit, jotka käyttävät `docker-build-push`- tai `ssh-deploy`-actionia. Jobi, joka pushaa imagen tai koskee hostiin muilla askelilla, ei ole piirissä. Tällainen on esimerkiksi suoraan `docker/build-push-action`illa tehty build tai repon oma deploy-action, myös vanhan ajon yksittäisen jobin uudelleenajossa.
 - `setup-toolchain` ja `wait-for-health` eivät tarkista mitään. setup-toolchainilla ei ole kohdetietoa, ja wait-for-health ajetaan vasta deployn jälkeen.
-- Workflowt, jotka eivät käytä cicd-actioneita (quantimodon server-ops, server-admin ja yöajot), eivät ole tämän piirissä.
+- Kutsuvan repon jäljelle jäävät aukot on kirjattu sen omaan dokumentaatioon.

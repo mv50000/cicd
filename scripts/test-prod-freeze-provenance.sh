@@ -184,6 +184,11 @@ if grep -qxF "URL: https://api.github.com/repos/$REPO/contents/.github/workflows
 else
   echo "FAIL request URL or Accept header is wrong:"; sed 's/^/    /' "$TMP/calls"; FAILS=$((FAILS + 1))
 fi
+if grep '^ARGV:' "$TMP/calls" | grep -q -- ' -fsS ' && grep '^ARGV:' "$TMP/calls" | grep -q -- ' --proto =https '; then
+  echo "ok   curl fails on HTTP errors and allows only https"
+else
+  echo "FAIL curl is missing -fsS or --proto =https"; FAILS=$((FAILS + 1))
+fi
 if grep '^ARGV:' "$TMP/calls" | grep -q 'tok-secret-123'; then
   echo "FAIL the token is in curl's argv"; FAILS=$((FAILS + 1))
 elif grep '^STDIN:' "$TMP/calls" | grep -q 'Authorization: Bearer tok-secret-123'; then
